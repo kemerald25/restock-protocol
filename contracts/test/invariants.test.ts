@@ -152,18 +152,138 @@ describe("Restock Protocol - SKURegistry Unit Tests", () => {
   });
 });
 
-describe("Restock Protocol - Critical Invariants", () => {
+describe("Restock Protocol - ClaimToken Unit Tests", () => {
   let registry: any;
-  let owner: any;
   let claimToken: any;
+  let owner: any;
   let merchant: any;
+  let user: any;
+  let otherUser: any;
+  const skuId = 1;
 
   beforeEach(async () => {
-    [owner, claimToken, merchant] = await ethers.getSigners();
+    [owner, merchant, user, otherUser] = await ethers.getSigners();
+    
     const SKURegistry = await ethers.getContractFactory("SKURegistry");
     registry = await SKURegistry.deploy(owner.address);
     await registry.waitForDeployment();
-    await registry.setClaimTokenAddress(claimToken.address);
+
+    const ClaimToken = await ethers.getContractFactory("ClaimToken");
+    claimToken = await ClaimToken.deploy(await registry.getAddress());
+    await claimToken.waitForDeployment();
+
+    await registry.setClaimTokenAddress(await claimToken.getAddress());
+
+    // Create SKU
+    await registry.connect(merchant).createSKU(
+      MOCK_SKU_CONFIG.maxSupply,
+      MOCK_SKU_CONFIG.royaltyBps,
+      MOCK_SKU_CONFIG.initialBasisValue,
+      MOCK_SKU_CONFIG.metadataURI
+    );
+  });
+
+  it("should allow dynamic URI resolution through SKURegistry", async () => {
+    expect(await claimToken.uri(skuId)).to.equal(MOCK_SKU_CONFIG.metadataURI);
+  });
+
+  it("should allow SKU merchant to mint tokens, updating the registry counters", async () => {
+    const mintAmount = 5;
+    await claimToken.connect(merchant).mint(skuId, user.address, mintAmount);
+
+    expect(await claimToken.balanceOf(user.address, skuId)).to.equal(mintAmount);
+
+    const sku = await registry.getSKU(skuId);
+    expect(sku.mintedSupply).to.equal(mintAmount);
+  });
+
+  it("should revert if non-merchant attempts to mint", async () => {
+    await expect(
+      claimToken.connect(user).mint(skuId, user.address, 5)
+    ).to.be.revertedWith("ClaimToken: caller is not the merchant");
+  });
+
+  it("should revert if minting would exceed maxSupply (propagated from registry)", async () => {
+    // Mint up to maxSupply is allowed
+    await claimToken.connect(merchant).mint(skuId, user.address, MOCK_SKU_CONFIG.maxSupply);
+    
+    // Minting even 1 more must revert (propagates SKURegistry revert)
+    await expect(
+      claimToken.connect(merchant).mint(skuId, user.address, 1)
+    ).to.be.revertedWith("SKU registry: mint amount would exceed maxSupply");
+  });
+
+  it("should allow a token holder to redeem tokens (one-way burn)", async () => {
+    await claimToken.connect(merchant).mint(skuId, user.address, 5);
+
+    const redeemAmount = 2;
+    const shippingRef = "sha256-shipping-reference-hash";
+    
+    const tx = await claimToken.connect(user).redeem(skuId, redeemAmount, shippingRef);
+    const receipt = await tx.wait();
+
+    // Verify balance decreases
+    expect(await claimToken.balanceOf(user.address, skuId)).to.equal(3);
+
+    // Verify registry counter updates
+    const sku = await registry.getSKU(skuId);
+    expect(sku.redeemedSupply).to.equal(redeemAmount);
+
+    // Verify UnitsRedeemed event emission
+    const event = receipt.logs.map((log: any) => {
+      try {
+        return claimToken.interface.parseLog(log);
+      } catch {
+        return null;
+      }
+    }).find((parsed: any) => parsed && parsed.name === "UnitsRedeemed");
+    
+    expect(event).to.not.be.null;
+    expect(event.args.skuId).to.equal(skuId);
+    expect(event.args.holder).to.equal(user.address);
+    expect(event.args.amount).to.equal(redeemAmount);
+    expect(event.args.redemptionId).to.equal(1); // First redemption ID is 1
+  });
+
+  it("should revert when redeeming more tokens than held", async () => {
+    await claimToken.connect(merchant).mint(skuId, user.address, 2);
+
+    await expect(
+      claimToken.connect(user).redeem(skuId, 3, "ref")
+    ).to.be.revertedWith("ClaimToken: insufficient balance for redemption");
+  });
+
+  it("should allow standard ERC-1155 transfers for un-redeemed balances", async () => {
+    await claimToken.connect(merchant).mint(skuId, user.address, 5);
+
+    // Transfer 2 tokens to otherUser
+    await claimToken.connect(user).safeTransferFrom(user.address, otherUser.address, skuId, 2, "0x");
+
+    expect(await claimToken.balanceOf(user.address, skuId)).to.equal(3);
+    expect(await claimToken.balanceOf(otherUser.address, skuId)).to.equal(2);
+  });
+});
+
+describe("Restock Protocol - Critical Invariants", () => {
+  let registry: any;
+  let claimToken: any;
+  let owner: any;
+  let merchant: any;
+  let user: any;
+  let otherUser: any;
+  const skuId = 1;
+
+  beforeEach(async () => {
+    [owner, merchant, user, otherUser] = await ethers.getSigners();
+    const SKURegistry = await ethers.getContractFactory("SKURegistry");
+    registry = await SKURegistry.deploy(owner.address);
+    await registry.waitForDeployment();
+
+    const ClaimToken = await ethers.getContractFactory("ClaimToken");
+    claimToken = await ClaimToken.deploy(await registry.getAddress());
+    await claimToken.waitForDeployment();
+
+    await registry.setClaimTokenAddress(await claimToken.getAddress());
   });
   
   describe("Invariant 1: Supply Cap Enforcement", () => {
@@ -176,10 +296,8 @@ describe("Restock Protocol - Critical Invariants", () => {
         MOCK_SKU_CONFIG.metadataURI
       );
 
-      const skuId = 1;
-
       // 2. Perform mint up to the supply cap
-      await registry.connect(claimToken).recordMint(skuId, MOCK_SKU_CONFIG.maxSupply);
+      await claimToken.connect(merchant).mint(skuId, user.address, MOCK_SKU_CONFIG.maxSupply);
       
       // Verify minted supply has reached max supply
       let sku = await registry.getSKU(skuId);
@@ -187,7 +305,7 @@ describe("Restock Protocol - Critical Invariants", () => {
 
       // 3. Attempting to mint even one additional unit must revert
       await expect(
-        registry.connect(claimToken).recordMint(skuId, 1)
+        claimToken.connect(merchant).mint(skuId, user.address, 1)
       ).to.be.revertedWith("SKU registry: mint amount would exceed maxSupply");
 
       // Verify checking cap via view function returns false
@@ -196,9 +314,47 @@ describe("Restock Protocol - Critical Invariants", () => {
   });
 
   describe("Invariant 2: One-way Burn on Redemption", () => {
-    it.skip("should prevent burned/redeemed tokens from being transferred, listed, or reserved", async () => {
-      // TODO: Test that once tokens are burned via redeem(), they are permanently out of circulation
-      // and attempting to transfer, list, or reserve them fails.
+    it("should prevent burned/redeemed tokens from being transferred, listed, or reserved", async () => {
+      // Create SKU and mint 5 tokens to user
+      await registry.connect(merchant).createSKU(
+        MOCK_SKU_CONFIG.maxSupply,
+        MOCK_SKU_CONFIG.royaltyBps,
+        MOCK_SKU_CONFIG.initialBasisValue,
+        MOCK_SKU_CONFIG.metadataURI
+      );
+      await claimToken.connect(merchant).mint(skuId, user.address, 5);
+
+      // 1. Redeem 3 of the 5 tokens
+      await claimToken.connect(user).redeem(skuId, 3, "opaque-shipping-ref");
+
+      // User's balance must decrease from 5 to 2
+      expect(await claimToken.balanceOf(user.address, skuId)).to.equal(2);
+
+      // (a) Verify burned tokens cannot be transferred:
+      // Attempting to transfer 3 tokens (which includes the redeemed/burned tokens) must revert.
+      await expect(
+        claimToken.connect(user).safeTransferFrom(user.address, otherUser.address, skuId, 3, "0x")
+      ).to.be.reverted;
+
+      // Transferring the remaining 2 unredeemed tokens works fine
+      await claimToken.connect(user).safeTransferFrom(user.address, otherUser.address, skuId, 2, "0x");
+      expect(await claimToken.balanceOf(user.address, skuId)).to.equal(0);
+      expect(await claimToken.balanceOf(otherUser.address, skuId)).to.equal(2);
+
+      // (b) Verify double redemption fails (redeeming more than held reverts):
+      // Attempting to redeem 3 tokens from otherUser (who only holds 2) must revert.
+      await expect(
+        claimToken.connect(otherUser).redeem(skuId, 3, "other-ref")
+      ).to.be.revertedWith("ClaimToken: insufficient balance for redemption");
+
+      // (c) Verify there is no way to recreate or restore a burned balance:
+      // Merchant can only mint up to the remaining max supply (which is 25 - 5 = 20 tokens)
+      await claimToken.connect(merchant).mint(skuId, otherUser.address, 20);
+      
+      // Attempting to mint even 1 additional token (e.g. trying to recreate the 3 burned ones) must revert
+      await expect(
+        claimToken.connect(merchant).mint(skuId, otherUser.address, 1)
+      ).to.be.revertedWith("SKU registry: mint amount would exceed maxSupply");
     });
   });
 
