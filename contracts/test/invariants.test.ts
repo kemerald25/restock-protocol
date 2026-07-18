@@ -264,9 +264,156 @@ describe("Restock Protocol - ClaimToken Unit Tests", () => {
   });
 });
 
+describe("Restock Protocol - Marketplace Unit Tests", () => {
+  let registry: any;
+  let claimToken: any;
+  let marketplace: any;
+  let owner: any;
+  let merchant: any;
+  let seller: any;
+  let buyer1: any;
+  let buyer2: any;
+  const skuId = 1;
+
+  beforeEach(async () => {
+    [owner, merchant, seller, buyer1, buyer2] = await ethers.getSigners();
+
+    const SKURegistry = await ethers.getContractFactory("SKURegistry");
+    registry = await SKURegistry.deploy(owner.address);
+    await registry.waitForDeployment();
+
+    const ClaimToken = await ethers.getContractFactory("ClaimToken");
+    claimToken = await ClaimToken.deploy(await registry.getAddress());
+    await claimToken.waitForDeployment();
+
+    await registry.setClaimTokenAddress(await claimToken.getAddress());
+
+    const Marketplace = await ethers.getContractFactory("Marketplace");
+    marketplace = await Marketplace.deploy(await claimToken.getAddress(), await registry.getAddress());
+    await marketplace.waitForDeployment();
+
+    // Create SKU
+    await registry.connect(merchant).createSKU(
+      MOCK_SKU_CONFIG.maxSupply,
+      MOCK_SKU_CONFIG.royaltyBps,
+      MOCK_SKU_CONFIG.initialBasisValue,
+      MOCK_SKU_CONFIG.metadataURI
+    );
+  });
+
+  describe("Listing Creation", () => {
+    it("should successfully create a listing if seller holds enough tokens", async () => {
+      // Mint 5 tokens to seller
+      await claimToken.connect(merchant).mint(skuId, seller.address, 5);
+
+      // Create listing
+      await marketplace.connect(seller).createListing(skuId, 5, ethers.parseUnits("150.00", 6));
+
+      const [retSkuId, retSeller, retQuantity, retPricePerUnit, retStatus] = await marketplace.getListing(1);
+      expect(retSkuId).to.equal(skuId);
+      expect(retSeller).to.equal(seller.address);
+      expect(retQuantity).to.equal(5);
+      expect(retPricePerUnit).to.equal(ethers.parseUnits("150.00", 6));
+      expect(retStatus).to.equal(0); // Open
+    });
+
+    it("should revert listing creation if seller does not hold enough tokens", async () => {
+      // Mint only 4 tokens to seller
+      await claimToken.connect(merchant).mint(skuId, seller.address, 4);
+
+      // Attempting to list 5 tokens must revert
+      await expect(
+        marketplace.connect(seller).createListing(skuId, 5, ethers.parseUnits("150.00", 6))
+      ).to.be.revertedWith("Marketplace: seller has insufficient token balance");
+    });
+  });
+
+  describe("Listing Cancellation", () => {
+    beforeEach(async () => {
+      await claimToken.connect(merchant).mint(skuId, seller.address, 5);
+      await marketplace.connect(seller).createListing(skuId, 5, ethers.parseUnits("150.00", 6));
+    });
+
+    it("should allow seller to cancel an open listing", async () => {
+      await marketplace.connect(seller).cancelListing(1);
+
+      const [,,,,status] = await marketplace.getListing(1);
+      expect(status).to.equal(2); // Cancelled
+    });
+
+    it("should revert cancellation by non-seller", async () => {
+      await expect(
+        marketplace.connect(buyer1).cancelListing(1)
+      ).to.be.revertedWith("Marketplace: caller is not the seller");
+    });
+
+    it("should revert cancellation if active reservation exists", async () => {
+      // Make active reservation of 2 units
+      await marketplace.connect(buyer1).reserve(1, 2);
+
+      // Attempting to cancel must revert
+      await expect(
+        marketplace.connect(seller).cancelListing(1)
+      ).to.be.revertedWith("Marketplace: listing has active reservations");
+    });
+  });
+
+  describe("Reservations & Time Sweeping", () => {
+    beforeEach(async () => {
+      await claimToken.connect(merchant).mint(skuId, seller.address, 10);
+      await marketplace.connect(seller).createListing(skuId, 10, ethers.parseUnits("150.00", 6));
+    });
+
+    it("should allow creating a reservation and decrement available unreserved quantity", async () => {
+      await marketplace.connect(buyer1).reserve(1, 4);
+
+      const res = await marketplace.getReservation(1);
+      expect(res.listingId).to.equal(1);
+      expect(res.buyer).to.equal(buyer1.address);
+      expect(res.quantity).to.equal(4);
+      expect(res.status).to.equal(0); // Active
+      
+      // Attempting to reserve 7 units must fail (only 6 left)
+      await expect(
+        marketplace.connect(buyer2).reserve(1, 7)
+      ).to.be.revertedWith("Marketplace: insufficient unreserved quantity");
+
+      // Reserving exactly 6 works
+      await marketplace.connect(buyer2).reserve(1, 6);
+    });
+
+    it("should revert releaseExpiredReservation if reservation is not yet expired", async () => {
+      await marketplace.connect(buyer1).reserve(1, 4);
+
+      // Attempting to release immediately must revert
+      await expect(
+        marketplace.releaseExpiredReservation(1)
+      ).to.be.revertedWith("Marketplace: reservation has not expired yet");
+    });
+
+    it("should allow releaseExpiredReservation after TTL and free up unreserved quantity", async () => {
+      await marketplace.connect(buyer1).reserve(1, 4);
+
+      // Increase time by 121 seconds (TTL is 120s)
+      await ethers.provider.send("evm_increaseTime", [121]);
+      await ethers.provider.send("evm_mine", []);
+
+      // Release reservation (anyone can call)
+      await marketplace.connect(buyer2).releaseExpiredReservation(1);
+
+      const res = await marketplace.getReservation(1);
+      expect(res.status).to.equal(2); // Expired
+
+      // The 4 units are now unreserved again, so we can reserve 10 units now
+      await marketplace.connect(buyer2).reserve(1, 10);
+    });
+  });
+});
+
 describe("Restock Protocol - Critical Invariants", () => {
   let registry: any;
   let claimToken: any;
+  let marketplace: any;
   let owner: any;
   let merchant: any;
   let user: any;
@@ -284,6 +431,10 @@ describe("Restock Protocol - Critical Invariants", () => {
     await claimToken.waitForDeployment();
 
     await registry.setClaimTokenAddress(await claimToken.getAddress());
+
+    const Marketplace = await ethers.getContractFactory("Marketplace");
+    marketplace = await Marketplace.deploy(await claimToken.getAddress(), await registry.getAddress());
+    await marketplace.waitForDeployment();
   });
   
   describe("Invariant 1: Supply Cap Enforcement", () => {
@@ -359,9 +510,33 @@ describe("Restock Protocol - Critical Invariants", () => {
   });
 
   describe("Invariant 3: No Double-locking Reservations", () => {
-    it.skip("should prevent double-locking reservations from exceeding the unreserved quantity of a listing", async () => {
-      // TODO: Test that overlapping reservation requests fail if their combined quantity exceeds the
-      // listing's total unreserved quantity.
+    it("should prevent double-locking reservations from exceeding the unreserved quantity of a listing", async () => {
+      // 1. Create SKU, mint tokens, and create a listing of 5 units
+      await registry.connect(merchant).createSKU(
+        MOCK_SKU_CONFIG.maxSupply,
+        MOCK_SKU_CONFIG.royaltyBps,
+        MOCK_SKU_CONFIG.initialBasisValue,
+        MOCK_SKU_CONFIG.metadataURI
+      );
+      await claimToken.connect(merchant).mint(skuId, user.address, 5);
+      await marketplace.connect(user).createListing(skuId, 5, ethers.parseUnits("150.00", 6));
+
+      // 2. First buyer reserves 2 units. This leaves 3 units unreserved.
+      await marketplace.connect(otherUser).reserve(1, 2);
+
+      // 3. Second buyer attempts to reserve 4 units.
+      // This MUST revert because 4 requested > 3 available (prevents double-locking).
+      await expect(
+        marketplace.connect(otherUser).reserve(1, 4)
+      ).to.be.revertedWith("Marketplace: insufficient unreserved quantity");
+
+      // 4. Second buyer requests 3 units instead. This must succeed.
+      await marketplace.connect(otherUser).reserve(1, 3);
+
+      // 5. Any subsequent reservation attempt must revert since available unreserved is now 0.
+      await expect(
+        marketplace.connect(otherUser).reserve(1, 1)
+      ).to.be.revertedWith("Marketplace: insufficient unreserved quantity");
     });
   });
 
