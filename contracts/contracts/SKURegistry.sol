@@ -70,6 +70,7 @@ contract SKURegistry is ISKURegistry, ISKURegistryInternal, Ownable {
     }
 
     /// @notice Merchant-only. Updates the reference real-world price.
+    /// This value is purely informational and does not constrain or restrict pricing (Invariant 5).
     function updateBasisValue(uint256 skuId, uint256 newBasisValue) external override onlyMerchant(skuId) {
         _skus[skuId].basisValue = newBasisValue;
         emit SKUBasisValueUpdated(skuId, newBasisValue);

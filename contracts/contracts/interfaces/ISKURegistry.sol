@@ -8,6 +8,9 @@ interface ISKURegistry {
         uint256 mintedSupply;
         uint256 redeemedSupply;
         uint16 royaltyBps;
+        // Reference real-world price in stablecoin smallest unit.
+        // Purely informational (non-binding). Must NEVER be used by any contract
+        // (including the Marketplace) to gate, restrict, or enforce listing prices (Invariant 5).
         uint256 basisValue;
         string metadataURI;
         uint8 status; // 0=Active, 1=Paused, 2=Deprecated

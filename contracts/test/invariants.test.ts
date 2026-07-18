@@ -806,9 +806,132 @@ describe("Restock Protocol - Critical Invariants", () => {
   });
 
   describe("Invariant 5: Basis Value as Non-binding Reference", () => {
-    it.skip("should allow purchases and transfers to proceed regardless of basisValue settings", async () => {
-      // TODO: Test that basisValue updates do not gate, block, or constrain trading on the marketplace.
-      // E.g., trades can happen at, above, or below the basisValue, and even if basisValue is updated or status is paused/active.
+    beforeEach(async () => {
+      // Create SKU with basisValue = 150
+      await registry.connect(merchant).createSKU(
+        MOCK_SKU_CONFIG.maxSupply,
+        MOCK_SKU_CONFIG.royaltyBps,
+        ethers.parseUnits("150.00", 6), // basisValue = 150
+        MOCK_SKU_CONFIG.metadataURI
+      );
+    });
+
+    it("should allow creating a listing, reserving, and fulfilling significantly above basisValue", async () => {
+      // Setup seller claim tokens
+      await claimToken.connect(merchant).mint(skuId, user.address, 5);
+      await claimToken.connect(user).setApprovalForAll(await marketplace.getAddress(), true);
+
+      // List at 500 USDC (significantly above 150 USDC basis value)
+      const price = ethers.parseUnits("500.00", 6);
+      await marketplace.connect(user).createListing(skuId, 2, price);
+
+      // Buyer reserves
+      await marketplace.connect(otherUser).reserve(1, 2);
+
+      // Fund buyer and approve
+      const totalDue = price * 2n; // 1000.00 USDC
+      await stableToken.mint(otherUser.address, totalDue);
+      await stableToken.connect(otherUser).approve(await marketplace.getAddress(), totalDue);
+
+      // Fulfill
+      await marketplace.connect(otherUser).fulfillReservation(1);
+
+      // Verify completion
+      const res = await marketplace.getReservation(1);
+      expect(res.status).to.equal(1); // Completed
+      expect(await claimToken.balanceOf(otherUser.address, skuId)).to.equal(2);
+    });
+
+    it("should allow creating a listing, reserving, and fulfilling significantly below basisValue", async () => {
+      // Setup seller claim tokens
+      await claimToken.connect(merchant).mint(skuId, user.address, 5);
+      await claimToken.connect(user).setApprovalForAll(await marketplace.getAddress(), true);
+
+      // List at 20 USDC (significantly below 150 USDC basis value)
+      const price = ethers.parseUnits("20.00", 6);
+      await marketplace.connect(user).createListing(skuId, 2, price);
+
+      // Buyer reserves
+      await marketplace.connect(otherUser).reserve(1, 2);
+
+      // Fund buyer and approve
+      const totalDue = price * 2n; // 40.00 USDC
+      await stableToken.mint(otherUser.address, totalDue);
+      await stableToken.connect(otherUser).approve(await marketplace.getAddress(), totalDue);
+
+      // Fulfill
+      await marketplace.connect(otherUser).fulfillReservation(1);
+
+      // Verify completion
+      const res = await marketplace.getReservation(1);
+      expect(res.status).to.equal(1); // Completed
+      expect(await claimToken.balanceOf(otherUser.address, skuId)).to.equal(2);
+    });
+
+    it("should allow fulfillment even if basisValue is updated after the reservation is made", async () => {
+      // Setup seller claim tokens
+      await claimToken.connect(merchant).mint(skuId, user.address, 5);
+      await claimToken.connect(user).setApprovalForAll(await marketplace.getAddress(), true);
+
+      const price = ethers.parseUnits("100.00", 6);
+      await marketplace.connect(user).createListing(skuId, 2, price);
+
+      // Buyer reserves
+      await marketplace.connect(otherUser).reserve(1, 2);
+
+      // Merchant updates basisValue to 250 USDC
+      await registry.connect(merchant).updateBasisValue(skuId, ethers.parseUnits("250.00", 6));
+
+      // Fund buyer and approve
+      const totalDue = price * 2n;
+      await stableToken.mint(otherUser.address, totalDue);
+      await stableToken.connect(otherUser).approve(await marketplace.getAddress(), totalDue);
+
+      // Fulfill should proceed exactly the same
+      await marketplace.connect(otherUser).fulfillReservation(1);
+
+      // Verify completion
+      const res = await marketplace.getReservation(1);
+      expect(res.status).to.equal(1); // Completed
+      expect(await claimToken.balanceOf(otherUser.address, skuId)).to.equal(2);
+    });
+
+    it("should behave identically for listings priced 0.01 above/below basis vs 10x basis (no-threshold check)", async () => {
+      // Setup seller claim tokens
+      await claimToken.connect(merchant).mint(skuId, user.address, 10);
+      await claimToken.connect(user).setApprovalForAll(await marketplace.getAddress(), true);
+
+      // We will create three listings:
+      // Listing 1: 150.01 (0.01 above basis)
+      // Listing 2: 149.99 (0.01 below basis)
+      // Listing 3: 1500.00 (10x basis)
+
+      const p1 = ethers.parseUnits("150.01", 6);
+      const p2 = ethers.parseUnits("149.99", 6);
+      const p3 = ethers.parseUnits("1500.00", 6);
+
+      await marketplace.connect(user).createListing(skuId, 2, p1); // Listing 1
+      await marketplace.connect(user).createListing(skuId, 2, p2); // Listing 2
+      await marketplace.connect(user).createListing(skuId, 2, p3); // Listing 3
+
+      // Reserve all three
+      await marketplace.connect(otherUser).reserve(1, 1); // Res 1
+      await marketplace.connect(otherUser).reserve(2, 1); // Res 2
+      await marketplace.connect(otherUser).reserve(3, 1); // Res 3
+
+      // Fund & approve for all
+      const totalDue = p1 + p2 + p3;
+      await stableToken.mint(otherUser.address, totalDue);
+      await stableToken.connect(otherUser).approve(await marketplace.getAddress(), totalDue);
+
+      // Fulfill all three and verify they succeed
+      await marketplace.connect(otherUser).fulfillReservation(1);
+      await marketplace.connect(otherUser).fulfillReservation(2);
+      await marketplace.connect(otherUser).fulfillReservation(3);
+
+      expect((await marketplace.getReservation(1)).status).to.equal(1);
+      expect((await marketplace.getReservation(2)).status).to.equal(1);
+      expect((await marketplace.getReservation(3)).status).to.equal(1);
     });
   });
 
