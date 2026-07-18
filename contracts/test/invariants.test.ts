@@ -268,6 +268,7 @@ describe("Restock Protocol - Marketplace Unit Tests", () => {
   let registry: any;
   let claimToken: any;
   let marketplace: any;
+  let stableToken: any;
   let owner: any;
   let merchant: any;
   let seller: any;
@@ -288,8 +289,16 @@ describe("Restock Protocol - Marketplace Unit Tests", () => {
 
     await registry.setClaimTokenAddress(await claimToken.getAddress());
 
+    const MockERC20 = await ethers.getContractFactory("MockERC20");
+    stableToken = await MockERC20.deploy("Mock USDC", "mUSDC", 6);
+    await stableToken.waitForDeployment();
+
     const Marketplace = await ethers.getContractFactory("Marketplace");
-    marketplace = await Marketplace.deploy(await claimToken.getAddress(), await registry.getAddress());
+    marketplace = await Marketplace.deploy(
+      await claimToken.getAddress(),
+      await registry.getAddress(),
+      await stableToken.getAddress()
+    );
     await marketplace.waitForDeployment();
 
     // Create SKU
@@ -408,12 +417,127 @@ describe("Restock Protocol - Marketplace Unit Tests", () => {
       await marketplace.connect(buyer2).reserve(1, 10);
     });
   });
+
+  describe("Fulfillment Unit Tests & Edge Cases", () => {
+    beforeEach(async () => {
+      await claimToken.connect(merchant).mint(skuId, seller.address, 10);
+      await claimToken.connect(seller).setApprovalForAll(await marketplace.getAddress(), true);
+      await marketplace.connect(seller).createListing(skuId, 10, ethers.parseUnits("150.00", 6));
+    });
+
+    it("should correctly handle royalty rounding behavior (favoring the seller)", async () => {
+      // Deploy a separate listing with price = 1 wei
+      await marketplace.connect(seller).createListing(skuId, 1, 1); // Listing ID 2
+      await marketplace.connect(buyer1).reserve(2, 1); // Reservation ID 1
+
+      // Fund buyer1 with 1 wei and approve
+      await stableToken.mint(buyer1.address, 1);
+      await stableToken.connect(buyer1).approve(await marketplace.getAddress(), 1);
+
+      const initSeller = await stableToken.balanceOf(seller.address);
+      const initMerchant = await stableToken.balanceOf(merchant.address);
+
+      // Fulfill
+      await marketplace.connect(buyer1).fulfillReservation(1);
+
+      // Since royalty is 3% (300 bps), 1 * 300 / 10000 = 0
+      // Seller should get 1 wei, merchant should get 0.
+      expect(await stableToken.balanceOf(seller.address)).to.equal(initSeller + 1n);
+      expect(await stableToken.balanceOf(merchant.address)).to.equal(initMerchant);
+    });
+
+    it("should decrement listing quantity correctly after partial fulfillment", async () => {
+      await marketplace.connect(buyer1).reserve(1, 3); // Reservation ID 1
+      await stableToken.mint(buyer1.address, ethers.parseUnits("450.00", 6));
+      await stableToken.connect(buyer1).approve(await marketplace.getAddress(), ethers.parseUnits("450.00", 6));
+
+      await marketplace.connect(buyer1).fulfillReservation(1);
+
+      const [,,quantity,,status] = await marketplace.getListing(1);
+      expect(quantity).to.equal(7);
+      expect(status).to.equal(0); // Still Open
+    });
+
+    it("should transition listing to Filled only once fully consumed", async () => {
+      // First partial reservation + fulfillment
+      await marketplace.connect(buyer1).reserve(1, 4); // Reservation ID 1
+      await stableToken.mint(buyer1.address, ethers.parseUnits("600.00", 6));
+      await stableToken.connect(buyer1).approve(await marketplace.getAddress(), ethers.parseUnits("600.00", 6));
+      await marketplace.connect(buyer1).fulfillReservation(1);
+
+      let [,,quantity,,status] = await marketplace.getListing(1);
+      expect(quantity).to.equal(6);
+      expect(status).to.equal(0); // Open
+
+      // Second reservation + fulfillment for the rest
+      await marketplace.connect(buyer2).reserve(1, 6); // Reservation ID 2
+      await stableToken.mint(buyer2.address, ethers.parseUnits("900.00", 6));
+      await stableToken.connect(buyer2).approve(await marketplace.getAddress(), ethers.parseUnits("900.00", 6));
+      await marketplace.connect(buyer2).fulfillReservation(2);
+
+      [,,quantity,,status] = await marketplace.getListing(1);
+      expect(quantity).to.equal(0);
+      expect(status).to.equal(1); // Filled
+    });
+
+    it("should revert if fulfillReservation is called on an expired reservation", async () => {
+      await marketplace.connect(buyer1).reserve(1, 2); // Reservation ID 1
+      await stableToken.mint(buyer1.address, ethers.parseUnits("300.00", 6));
+      await stableToken.connect(buyer1).approve(await marketplace.getAddress(), ethers.parseUnits("300.00", 6));
+
+      // Evm increase time past 120s TTL
+      await ethers.provider.send("evm_increaseTime", [121]);
+      await ethers.provider.send("evm_mine", []);
+
+      await expect(
+        marketplace.connect(buyer1).fulfillReservation(1)
+      ).to.be.revertedWith("Marketplace: reservation expired, use releaseExpiredReservation");
+    });
+
+    it("should revert if fulfillReservation is called by someone other than the buyer", async () => {
+      await marketplace.connect(buyer1).reserve(1, 2); // Reservation ID 1
+      await stableToken.mint(buyer1.address, ethers.parseUnits("300.00", 6));
+      await stableToken.connect(buyer1).approve(await marketplace.getAddress(), ethers.parseUnits("300.00", 6));
+
+      // Attempt to call by seller should fail
+      await expect(
+        marketplace.connect(seller).fulfillReservation(1)
+      ).to.be.revertedWith("Marketplace: caller must be the buyer");
+    });
+
+    it("should block reentrant calls using nonReentrant guard", async () => {
+      const MockReentrantBuyer = await ethers.getContractFactory("MockReentrantBuyer");
+      const reentrantBuyer: any = await MockReentrantBuyer.deploy(
+        await marketplace.getAddress(),
+        await stableToken.getAddress()
+      );
+      await reentrantBuyer.waitForDeployment();
+
+      // Reserve 2 tokens for the reentrant buyer
+      await reentrantBuyer.reserveListing(1, 2); // Reservation ID 1
+
+      // Setup reservation details on the mock buyer contract
+      await reentrantBuyer.setReservation(1);
+      await reentrantBuyer.setShouldReenter(true);
+
+      // Fund the contract and approve Marketplace
+      await stableToken.mint(await reentrantBuyer.getAddress(), ethers.parseUnits("300.00", 6));
+      await reentrantBuyer.approveMarketplace(ethers.parseUnits("300.00", 6));
+
+      // Call initiateFulfill
+      await reentrantBuyer.initiateFulfill();
+
+      // Verify that reentrancy was blocked inside onERC1155Received
+      expect(await reentrantBuyer.reentrancyFailed()).to.be.true;
+    });
+  });
 });
 
 describe("Restock Protocol - Critical Invariants", () => {
   let registry: any;
   let claimToken: any;
   let marketplace: any;
+  let stableToken: any;
   let owner: any;
   let merchant: any;
   let user: any;
@@ -432,8 +556,16 @@ describe("Restock Protocol - Critical Invariants", () => {
 
     await registry.setClaimTokenAddress(await claimToken.getAddress());
 
+    const MockERC20 = await ethers.getContractFactory("MockERC20");
+    stableToken = await MockERC20.deploy("Mock USDC", "mUSDC", 6);
+    await stableToken.waitForDeployment();
+
     const Marketplace = await ethers.getContractFactory("Marketplace");
-    marketplace = await Marketplace.deploy(await claimToken.getAddress(), await registry.getAddress());
+    marketplace = await Marketplace.deploy(
+      await claimToken.getAddress(),
+      await registry.getAddress(),
+      await stableToken.getAddress()
+    );
     await marketplace.waitForDeployment();
   });
   
@@ -541,10 +673,135 @@ describe("Restock Protocol - Critical Invariants", () => {
   });
 
   describe("Invariant 4: Atomic Royalty + Token Transfer", () => {
-    it.skip("should atomically transfer tokens and route royalties or revert entirely", async () => {
-      // TODO: Test that purchasing a token pulls stablecoin payment, splits and routes the royalty
-      // to the merchant address, and transfers the claim token in a single atomic transaction.
-      // If either payment, royalty routing, or token transfer fails, the entire TX must revert.
+    beforeEach(async () => {
+      // Create SKU
+      await registry.connect(merchant).createSKU(
+        MOCK_SKU_CONFIG.maxSupply,
+        MOCK_SKU_CONFIG.royaltyBps,
+        MOCK_SKU_CONFIG.initialBasisValue,
+        MOCK_SKU_CONFIG.metadataURI
+      );
+    });
+
+    it("should atomically transfer tokens and route royalties in a single transaction", async () => {
+      // Setup seller with claim tokens
+      await claimToken.connect(merchant).mint(skuId, user.address, 5);
+      await claimToken.connect(user).setApprovalForAll(await marketplace.getAddress(), true);
+
+      // Create listing
+      const price = ethers.parseUnits("100.00", 6);
+      await marketplace.connect(user).createListing(skuId, 5, price);
+
+      // Buyer reserves
+      await marketplace.connect(otherUser).reserve(1, 2);
+
+      // Fund buyer and approve Marketplace
+      const totalDue = price * 2n; // 200.00 USDC
+      await stableToken.mint(otherUser.address, totalDue);
+      await stableToken.connect(otherUser).approve(await marketplace.getAddress(), totalDue);
+
+      const initBuyerStable = await stableToken.balanceOf(otherUser.address);
+      const initSellerStable = await stableToken.balanceOf(user.address);
+      const initMerchantStable = await stableToken.balanceOf(merchant.address);
+
+      // Fulfill reservation
+      await marketplace.connect(otherUser).fulfillReservation(1);
+
+      // Check reservation status
+      const res = await marketplace.getReservation(1);
+      expect(res.status).to.equal(1); // Completed
+
+      // Check balances
+      // Buyer gets claim tokens
+      expect(await claimToken.balanceOf(otherUser.address, skuId)).to.equal(2);
+      expect(await claimToken.balanceOf(user.address, skuId)).to.equal(3);
+
+      // Stablecoin checks
+      // Buyer balance goes down by totalDue
+      expect(await stableToken.balanceOf(otherUser.address)).to.equal(initBuyerStable - totalDue);
+      
+      // Royalty calculation: 200.00 * 300 / 10000 = 6.00 USDC
+      const expectedRoyalty = (totalDue * BigInt(MOCK_SKU_CONFIG.royaltyBps)) / 10000n;
+      const expectedSellerAmount = totalDue - expectedRoyalty;
+
+      expect(await stableToken.balanceOf(merchant.address)).to.equal(initMerchantStable + expectedRoyalty);
+      expect(await stableToken.balanceOf(user.address)).to.equal(initSellerStable + expectedSellerAmount);
+    });
+
+    it("should revert entirely and modify no balances/state if buyer has insufficient stablecoin approval", async () => {
+      // Setup seller with claim tokens
+      await claimToken.connect(merchant).mint(skuId, user.address, 5);
+      await claimToken.connect(user).setApprovalForAll(await marketplace.getAddress(), true);
+
+      // Create listing
+      const price = ethers.parseUnits("100.00", 6);
+      await marketplace.connect(user).createListing(skuId, 5, price);
+
+      // Buyer reserves
+      await marketplace.connect(otherUser).reserve(1, 2);
+
+      // Fund buyer but approve insufficient amount
+      const totalDue = price * 2n;
+      await stableToken.mint(otherUser.address, totalDue);
+      await stableToken.connect(otherUser).approve(await marketplace.getAddress(), totalDue - 1n);
+
+      const initBuyerStable = await stableToken.balanceOf(otherUser.address);
+      const initSellerStable = await stableToken.balanceOf(user.address);
+      const initMerchantStable = await stableToken.balanceOf(merchant.address);
+
+      // Fulfill should revert
+      await expect(
+        marketplace.connect(otherUser).fulfillReservation(1)
+      ).to.be.reverted; // standard ERC20 revert
+
+      // Check state is unchanged
+      const res = await marketplace.getReservation(1);
+      expect(res.status).to.equal(0); // Still Active
+
+      // Check balances are unchanged
+      expect(await claimToken.balanceOf(otherUser.address, skuId)).to.equal(0);
+      expect(await claimToken.balanceOf(user.address, skuId)).to.equal(5);
+      expect(await stableToken.balanceOf(otherUser.address)).to.equal(initBuyerStable);
+      expect(await stableToken.balanceOf(merchant.address)).to.equal(initMerchantStable);
+      expect(await stableToken.balanceOf(user.address)).to.equal(initSellerStable);
+    });
+
+    it("should revert entirely and modify no balances/state if seller lacks claim tokens/approval", async () => {
+      // Setup seller with claim tokens
+      await claimToken.connect(merchant).mint(skuId, user.address, 5);
+      // Do NOT set approval for Marketplace
+
+      // Create listing (creates successfully because balance check passes initially)
+      const price = ethers.parseUnits("100.00", 6);
+      await marketplace.connect(user).createListing(skuId, 5, price);
+
+      // Buyer reserves
+      await marketplace.connect(otherUser).reserve(1, 2);
+
+      // Fund buyer and approve Marketplace
+      const totalDue = price * 2n;
+      await stableToken.mint(otherUser.address, totalDue);
+      await stableToken.connect(otherUser).approve(await marketplace.getAddress(), totalDue);
+
+      const initBuyerStable = await stableToken.balanceOf(otherUser.address);
+      const initSellerStable = await stableToken.balanceOf(user.address);
+      const initMerchantStable = await stableToken.balanceOf(merchant.address);
+
+      // Fulfill should revert because of missing seller ERC-1155 approval
+      await expect(
+        marketplace.connect(otherUser).fulfillReservation(1)
+      ).to.be.reverted;
+
+      // Check state is unchanged
+      const res = await marketplace.getReservation(1);
+      expect(res.status).to.equal(0); // Still Active
+
+      // Check balances are unchanged
+      expect(await claimToken.balanceOf(otherUser.address, skuId)).to.equal(0);
+      expect(await claimToken.balanceOf(user.address, skuId)).to.equal(5);
+      expect(await stableToken.balanceOf(otherUser.address)).to.equal(initBuyerStable);
+      expect(await stableToken.balanceOf(merchant.address)).to.equal(initMerchantStable);
+      expect(await stableToken.balanceOf(user.address)).to.equal(initSellerStable);
     });
   });
 
