@@ -25,6 +25,21 @@ const config: HardhatUserConfig = {
       accounts: [MERCHANT_PRIVATE_KEY],
     },
   },
+  etherscan: {
+    apiKey: {
+      baseSepolia: process.env.BASESCAN_API_KEY || "placeholder",
+    },
+    customChains: [
+      {
+        network: "baseSepolia",
+        chainId: 84532,
+        urls: {
+          apiURL: "https://api-sepolia.basescan.org/api",
+          browserURL: "https://sepolia.basescan.org",
+        },
+      },
+    ],
+  },
 };
 
 export default config;
