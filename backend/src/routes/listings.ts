@@ -1,45 +1,42 @@
 import { Router, Request, Response } from "express";
-import { MOCK_SKU_CONFIG } from "../config";
+import { skuRegistry } from "../lib/contracts";
+import { getOpenListingsForSKU } from "../lib/queries";
 
 const router = Router();
 
 /**
  * GET /skus/{skuId}/listings
  * 
- * TODO: Query the smart contract or an indexer for active, open listings on the IMarketplace contract.
- * Results must be sorted by price per unit ascending so agents can discover the cheapest available unit.
+ * Query the Marketplace contract for all open, active listings for the given SKU,
+ * sorted by price per unit ascending.
  */
-router.get("/skus/:skuId/listings", (req: Request, res: Response) => {
+router.get("/skus/:skuId/listings", async (req: Request, res: Response) => {
   const { skuId } = req.params;
 
-  if (skuId !== MOCK_SKU_CONFIG.skuId) {
-    return res.status(404).json({ error: "SKU not found" });
-  }
+  try {
+    const skuIdBigInt = BigInt(skuId);
 
-  // Returning mock listings sorted by price ascending
-  res.json({
-    skuId: skuId,
-    listings: [
-      {
-        listingId: 7,
-        skuId: skuId,
-        seller: "0xSellerAddressPlaceholder",
-        quantity: 5,
-        pricePerUnit: MOCK_SKU_CONFIG.lowestListingPrice,
-        status: "Open",
-        createdAt: Math.floor(Date.now() / 1000) - 3600
-      },
-      {
-        listingId: 8,
-        skuId: skuId,
-        seller: "0xAnotherSellerAddress",
-        quantity: 2,
-        pricePerUnit: "165.00",
-        status: "Open",
-        createdAt: Math.floor(Date.now() / 1000) - 1800
-      }
-    ]
-  });
+    // Verify SKU exists onchain; throws if not found
+    await skuRegistry.getSKU(skuIdBigInt);
+
+    // Fetch open listings
+    const listings = await getOpenListingsForSKU(skuIdBigInt);
+
+    // Sort listings by price ascending
+    listings.sort((a, b) => parseFloat(a.pricePerUnit) - parseFloat(b.pricePerUnit));
+
+    res.json({
+      skuId: skuId,
+      listings: listings
+    });
+  } catch (error: any) {
+    // If the contract reverted, it's likely SKU doesn't exist
+    if (error.message && error.message.includes("SKU does not exist")) {
+      return res.status(404).json({ error: "SKU not found" });
+    }
+    console.error("[Listings Route Error]:", error);
+    res.status(500).json({ error: "Failed to retrieve listings from blockchain", details: error.message });
+  }
 });
 
 export default router;

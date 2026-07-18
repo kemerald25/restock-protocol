@@ -26,3 +26,7 @@ build/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Backend database cache
+backend/data/db.json
+
