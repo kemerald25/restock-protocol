@@ -24,3 +24,10 @@ This project has been scaffolded with:
 - Configured environments and placeholder packages.
 
 For phase-specific details and instructions on running tests and the backend stub, refer to the `README.md` inside each respective directory.
+
+## Agentic Payment Infrastructure (x402)
+
+The agentic reservation-to-payment flow utilizes the Coinbase `x402` payment protocol scheme. 
+- **Facilitator**: Coinbase's free public facilitator is used for EIP-712 domain signature verification and settlement.
+- **URL**: `https://x402.org/facilitator`
+- **Dependencies**: No paid CDP API keys or subscriptions are required to run, test, or verify the integration.

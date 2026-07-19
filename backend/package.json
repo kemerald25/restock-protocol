@@ -10,9 +10,13 @@
     "test": "ts-node test/runner.ts"
   },
   "dependencies": {
+    "@x402/core": "^2.19.0",
+    "@x402/evm": "^2.19.0",
+    "@x402/express": "^2.19.0",
     "dotenv": "^16.4.5",
     "ethers": "^6.17.0",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "viem": "^2.55.4"
   },
   "devDependencies": {
     "@types/chai": "^5.2.3",

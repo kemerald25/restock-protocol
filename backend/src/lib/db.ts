@@ -16,14 +16,34 @@ export interface Redemption {
   createdAt: number;
 }
 
+export interface ReservationRecord {
+  reservationId: string;
+  listingId: number;
+  buyer: string;
+  quantity: number;
+  status: "PENDING_SIGNATURE" | "SUBMITTED_PAYMENT" | "PAID" | "FULFILLED" | "DELIVERED" | "FAILED_REFUNDING" | "REFUNDED" | "FAILED_ESCALATED" | "REFUND_FAILED_ESCALATED";
+  pricePerUnit: string;
+  totalDue: string;
+  expiresAt: number;
+  paymentTxHash?: string;
+  fulfillmentTxHash?: string;
+  deliveryTxHash?: string;
+  refundTxHash?: string;
+  retryCount: number;
+  lastError?: string;
+  updatedAt: number;
+}
+
 export interface Database {
   redemptions: Record<string, Redemption>;
   shippingAddresses: Record<string, string>; // mapping from shippingRef -> shippingAddressResolved
+  reservations: Record<string, ReservationRecord>;
 }
 
 const defaultDB: Database = {
   redemptions: {},
   shippingAddresses: {},
+  reservations: {},
 };
 
 export const initDB = () => {
@@ -39,7 +59,11 @@ export const readDB = (): Database => {
   initDB();
   try {
     const data = fs.readFileSync(DB_PATH, "utf8");
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (!parsed.redemptions) parsed.redemptions = {};
+    if (!parsed.shippingAddresses) parsed.shippingAddresses = {};
+    if (!parsed.reservations) parsed.reservations = {};
+    return parsed;
   } catch (err) {
     return defaultDB;
   }
