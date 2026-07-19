@@ -19,6 +19,13 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
   const testAddress = "123 Web3 Boulevard, San Francisco, CA 94103, US";
   const expectedRef = canonicalizeAndHashAddress(testAddress);
 
+  before(async () => {
+    // Clear any stuck / expired reservations from the database to speed up tests
+    const db = readDB();
+    db.reservations = {};
+    writeDB(db);
+  });
+
   it("GET /health - should return healthy", async () => {
     const res = await request(app).get("/health");
     expect(res.status).to.equal(200);
@@ -548,8 +555,17 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
     });
 
     it("should escalate to REFUND_FAILED_ESCALATED when refund transaction itself fails to submit repeatedly", async () => {
-      const { usdcWithRelayer } = require("../src/lib/contracts");
+      const { usdcWithRelayer, usdc, relayerSigner } = require("../src/lib/contracts");
       
+      // Fund relayer with USDC to bypass the balance check delay in triggerRefund
+      const relayerAddress = await relayerSigner.getAddress();
+      const currentBal = await usdc.balanceOf(relayerAddress);
+      if (currentBal < ethers.parseUnits("0.1", 6)) {
+        console.log(`      [Test Setup] Funding relayer with 1 USDC for refund escalation test...`);
+        const txFund = await usdc.connect(merchantSigner).transfer(relayerAddress, ethers.parseUnits("1.0", 6));
+        await txFund.wait();
+      }
+
       // 1. Create a reservation that we mock-fail during fulfillment
       const testResId = "mock-esc-res-id-" + Date.now();
       const db = readDB();

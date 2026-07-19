@@ -16,7 +16,7 @@ if (!fs.existsSync(DEPLOYMENT_PATH)) {
   throw new Error(`Deployment file not found at: ${DEPLOYMENT_PATH}`);
 }
 
-const deployment = JSON.parse(fs.readFileSync(DEPLOYMENT_PATH, "utf8"));
+export const deployment = JSON.parse(fs.readFileSync(DEPLOYMENT_PATH, "utf8"));
 
 // Dynamic ABI loading function
 const loadABI = (contractName: string) => {
@@ -44,9 +44,42 @@ export const addresses = {
   deployer: deployment.deployer as string,
 };
 
+class RetryingJsonRpcProvider extends ethers.JsonRpcProvider {
+  async send(method: string, params: Array<any> | Record<string, any>): Promise<any> {
+    let attempts = 0;
+    const maxAttempts = 5;
+    let delay = 1000;
+    while (attempts < maxAttempts) {
+      try {
+        return await super.send(method, params);
+      } catch (error: any) {
+        attempts++;
+        const isTransient = 
+          error.message?.includes("ECONNRESET") ||
+          error.message?.includes("ETIMEDOUT") ||
+          error.message?.includes("socket hang up") ||
+          error.message?.includes("network") ||
+          error.message?.includes("rate limit") ||
+          error.message?.includes("429") ||
+          error.message?.includes("ENOTFOUND") ||
+          error.code === "TIMEOUT" ||
+          error.code === "SERVER_ERROR";
+        
+        if (isTransient && attempts < maxAttempts) {
+          console.warn(`[RetryingJsonRpcProvider] Transient error on ${method} (attempt ${attempts}/${maxAttempts}): ${error.message}. Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+}
+
 // RPC configuration
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
-export const provider = new ethers.JsonRpcProvider(RPC_URL);
+export const provider = new RetryingJsonRpcProvider(RPC_URL);
 
 // Contract Instances (typed as any to bypass monorepo workspace tsconfig rootDir limits)
 export const skuRegistry = new ethers.Contract(

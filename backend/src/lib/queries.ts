@@ -1,4 +1,4 @@
-import { skuRegistry, marketplace, provider } from "./contracts";
+import { skuRegistry, marketplace, provider, deployment } from "./contracts";
 import { SKU_METADATA } from "../config";
 
 export interface SKUDetails {
@@ -43,13 +43,12 @@ export const getBlockTimestamp = async (blockNumber: number): Promise<number> =>
 
 /**
  * Safe query filter that handles RPC block range limitations.
- * Tries a larger block range (last 100k blocks ~2 days) first,
- * and falls back to a smaller block range (last 1900 blocks) if the RPC complains.
+ * Queries from deployment block number to minimize request size and avoid timeouts.
  */
 export const querySafeFilter = async (contract: any, filter: any): Promise<any[]> => {
+  const fromBlock = deployment?.blockNumber ? Number(deployment.blockNumber) : -100000;
   try {
-    // Try last 100,000 blocks (~2.3 days on Base Sepolia)
-    return await contract.queryFilter(filter, -100000);
+    return await contract.queryFilter(filter, fromBlock);
   } catch (err: any) {
     try {
       // Fallback to last 1900 blocks to comply with strict 2000 range limits
@@ -121,7 +120,8 @@ export const getOpenListingsForSKU = async (skuId: bigint): Promise<ListingDetai
           status: Number(listing.status), // 0=Open, 1=Filled, 2=Cancelled
           createdAt
         };
-      } catch (err) {
+      } catch (err: any) {
+        console.error(`[queries.ts] Error resolving listing details for ID ${id}:`, err.message || err);
         return null;
       }
     })

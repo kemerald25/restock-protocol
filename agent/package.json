@@ -1,0 +1,20 @@
+{
+  "name": "restock-protocol-agent-demo",
+  "version": "1.0.0",
+  "description": "Standalone Autonomous Agent Demo for Restock Protocol",
+  "main": "agent.ts",
+  "scripts": {
+    "demo": "ts-node agent.ts"
+  },
+  "dependencies": {
+    "@x402/core": "^2.19.0",
+    "@x402/evm": "^2.19.0",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.2"
+  }
+}
