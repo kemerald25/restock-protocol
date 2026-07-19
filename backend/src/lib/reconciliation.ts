@@ -14,6 +14,28 @@ let jobInterval: NodeJS.Timeout | null = null;
 // Retry ceiling definition
 const RETRY_CEILING = 5;
 
+async function waitForRelayerUSDC(neededAmount: bigint) {
+  try {
+    const relayerAddress = await usdcWithRelayer.runner.getAddress();
+    console.log(`[Reconciliation] Waiting for relayer USDC balance to sync to at least ${neededAmount.toString()}...`);
+    let synced = false;
+    for (let i = 0; i < 15; i++) {
+      const balance = await usdcWithRelayer.balanceOf(relayerAddress);
+      if (balance >= neededAmount) {
+        synced = true;
+        break;
+      }
+      console.log(`[Reconciliation] Relayer USDC balance not yet synced, retrying in 2s...`);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    if (!synced) {
+      console.warn(`[Reconciliation] Warning: Relayer USDC balance not synced on RPC, continuing anyway...`);
+    }
+  } catch (err: any) {
+    console.error(`[Reconciliation] Error checking relayer USDC balance:`, err.message || err);
+  }
+}
+
 /**
  * Main reconciliation function. Scans db.json for intermediate transaction states and processes them.
  */
@@ -244,6 +266,7 @@ async function processRecord(record: ReservationRecord) {
         
         // Convert totalDue back to USDC atomic units (6 decimals)
         const refundAmountAtomic = ethers.parseUnits(currentRecord.totalDue, 6);
+        await waitForRelayerUSDC(refundAmountAtomic);
         
         // Call transfer(buyer, amount)
         const tx = await usdcWithRelayer.transfer(currentRecord.buyer, refundAmountAtomic);
@@ -293,6 +316,7 @@ export async function triggerRefund(record: ReservationRecord, db: any, reason: 
   // Attempt inline immediate refund submission
   try {
     const refundAmountAtomic = ethers.parseUnits(record.totalDue, 6);
+    await waitForRelayerUSDC(refundAmountAtomic);
     const tx = await usdcWithRelayer.transfer(record.buyer, refundAmountAtomic);
     console.log(`[Reconciliation] Immediate refund TX submitted: ${tx.hash}`);
     record.refundTxHash = tx.hash;

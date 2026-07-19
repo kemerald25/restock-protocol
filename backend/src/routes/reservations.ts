@@ -10,6 +10,7 @@ import {
   marketplaceWithRelayer,
   claimToken,
   claimTokenWithRelayer,
+  usdc,
   usdcWithRelayer,
   addresses,
   relayerSigner
@@ -200,6 +201,23 @@ router.post("/reservations/:reservationId/pay", async (req: Request, res: Respon
     record.paymentTxHash = paymentTxHash;
     record.updatedAt = Math.floor(Date.now() / 1000);
     writeDB(db);
+
+    // Wait for relayer USDC balance to reflect the payment
+    console.log(`[Pay Route] Waiting for relayer USDC balance to sync...`);
+    const neededUSDC = ethers.parseUnits(record.totalDue, 6);
+    let usdcSynced = false;
+    for (let i = 0; i < 15; i++) {
+      const balance = await usdc.balanceOf(relayerSigner!.address);
+      if (balance >= neededUSDC) {
+        usdcSynced = true;
+        break;
+      }
+      console.log(`[Pay Route] Relayer USDC balance not yet synced, retrying in 2s...`);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    if (!usdcSynced) {
+      console.warn(`[Pay Route] Warning: Relayer USDC balance not synced on RPC, continuing anyway...`);
+    }
 
     // 5. Try to fulfill reservation immediately (Inline Try/Catch)
     try {
