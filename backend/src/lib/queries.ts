@@ -144,28 +144,51 @@ export const getOpenListingsForSKU = async (skuId: bigint): Promise<ListingDetai
 };
 
 export const getSKUs = async (): Promise<SKUDetails[]> => {
-  let skuId = 1n;
   const skus: SKUDetails[] = [];
-  
-  while (true) {
-    try {
-      const sku = await skuRegistry.getSKU(skuId);
-      const listings = await getOpenListingsForSKU(skuId);
-      
+  let currentId = 1n;
+  const batchSize = 5;
+  let hasMore = true;
+
+  while (hasMore) {
+    const ids = Array.from({ length: batchSize }, (_, i) => currentId + BigInt(i));
+    const rawResults = await Promise.all(
+      ids.map(id =>
+        skuRegistry.getSKU(id)
+          .then((sku: any) => ({ id, sku }))
+          .catch(() => null)
+      )
+    );
+
+    const validResults = rawResults.filter((r): r is { id: bigint; sku: any } => r !== null && r.sku && r.sku.merchant !== "0x0000000000000000000000000000000000000000");
+
+    if (validResults.length < batchSize) {
+      hasMore = false;
+    }
+
+    if (validResults.length === 0) break;
+
+    const listingsResults = await Promise.all(
+      validResults.map(r => getOpenListingsForSKU(r.id))
+    );
+
+    for (let idx = 0; idx < validResults.length; idx++) {
+      const { id: skuId, sku } = validResults[idx];
+      const listings = listingsResults[idx];
+
       const availableUnits = listings.reduce((sum, l) => sum + l.quantity, 0);
       let lowestListingPrice: string | null = null;
-      
+
       if (listings.length > 0) {
         const prices = listings.map(l => parseFloat(l.pricePerUnit));
         lowestListingPrice = Math.min(...prices).toFixed(2);
       }
-      
+
       const metadata = SKU_METADATA[skuId.toString()] || {
         name: `SKU #${skuId}`,
         variant: "Default",
         category: "uncategorized",
       };
-      
+
       skus.push({
         skuId: skuId.toString(),
         name: metadata.name,
@@ -181,13 +204,10 @@ export const getSKUs = async (): Promise<SKUDetails[]> => {
         royaltyBps: Number(sku.royaltyBps),
         metadataURI: sku.metadataURI,
       });
-      
-      skuId++;
-    } catch (err) {
-      // Revert indicates end of SKUs
-      break;
     }
+
+    currentId += BigInt(batchSize);
   }
-  
+
   return skus;
 };

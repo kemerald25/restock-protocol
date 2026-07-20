@@ -261,11 +261,48 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
   });
 
   describe("Admin Onchain Basis Value Update", () => {
-    it("POST /admin/skus/1/basis-value - should update basis value onchain", async () => {
-      if (!merchantSigner) return;
+    let testSkuId: number;
+
+    before(async function () {
+      if (!merchantSigner) {
+        this.skip();
+      }
+
+      console.log("      [Test Setup] Registering a new SKU dynamically for Admin Basis Value isolation...");
+      const skuTx = await skuRegistry.connect(merchantSigner).createSKU(
+        1000n, // maxSupply
+        500,   // royaltyBps
+        ethers.parseUnits("150.00", 6), // initialBasisValue
+        "https://example.com/sku-basis-value-metadata"
+      );
+      const skuReceipt = await skuTx.wait();
+      const parsedSkuLogs = skuReceipt.logs.map((log: any) => {
+        try { return skuRegistry.interface.parseLog(log); } catch (e) { return null; }
+      });
+      const skuCreatedEvent = parsedSkuLogs.find((l: any) => l && l.name === "SKUCreated");
+      testSkuId = Number(skuCreatedEvent.args[0]);
+      console.log(`      [Test Setup] Dynamically registered SKU ID for admin update: ${testSkuId}`);
+
+      // Verify SKU is visible on the RPC node before proceeding
+      let verified = false;
+      for (let i = 0; i < 15; i++) {
+        try {
+          await skuRegistry.getSKU(testSkuId);
+          verified = true;
+          break;
+        } catch (e) {
+          console.log(`      [Test Setup] SKU ${testSkuId} not yet visible on RPC, retrying in 2s...`);
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      }
+      if (!verified) throw new Error(`SKU ${testSkuId} failed to sync on RPC`);
+    });
+
+    it("POST /admin/skus/:skuId/basis-value - should update basis value onchain", async () => {
+      if (!merchantSigner || !testSkuId) return;
 
       // 1. Get current basis value from onchain registry
-      const initialSku = await skuRegistry.getSKU(1);
+      const initialSku = await skuRegistry.getSKU(testSkuId);
       const currentValUSDC = parseFloat(ethers.formatUnits(initialSku.basisValue, 6));
 
       // 2. Toggle/change value (e.g. alternate between 150.00 and 155.00)
@@ -273,7 +310,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
 
       // 3. Update via backend API
       const res = await request(app)
-        .post("/admin/skus/1/basis-value")
+        .post(`/admin/skus/${testSkuId}/basis-value`)
         .send({ value: newValUSDC });
 
       expect(res.status).to.equal(200);
@@ -283,7 +320,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
 
       // 4. Verify onchain registry reflects the new value
       await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait for RPC block replication
-      const updatedSku = await skuRegistry.getSKU(1);
+      const updatedSku = await skuRegistry.getSKU(testSkuId);
       const updatedValFormatted = parseFloat(ethers.formatUnits(updatedSku.basisValue, 6)).toFixed(2);
       expect(updatedValFormatted).to.equal(newValUSDC);
     });

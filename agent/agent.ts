@@ -4,11 +4,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 // @ts-ignore
-import { x402Client, x402HTTPClient } from "@x402/core/client";
-// @ts-ignore
-import { registerExactEvmScheme } from "@x402/evm/exact/client";
-// @ts-ignore
-import { decodePaymentRequiredHeader, encodePaymentSignatureHeader } from "@x402/core/http";
+import { decodePaymentRequiredHeader } from "@x402/core/http";
+import { createX402PaymentHeader, X402Signer } from "./x402-helper";
 
 // Initialize environment variables
 dotenv.config();
@@ -194,8 +191,7 @@ async function main() {
 
   console.log(`Signing EIP-3009 Transfer Authorization via EIP-712 signature...`);
   
-  const client = new x402Client();
-  const clientSigner = {
+  const clientSigner: X402Signer = {
     address: wallet.address.toLowerCase() as `0x${string}`,
     signTypedData: async (typedData: any) => {
       // Ethers expects us to delete EIP712Domain from types when signing
@@ -215,11 +211,7 @@ async function main() {
     }
   };
 
-  registerExactEvmScheme(client, { signer: clientSigner });
-  const httpClient = new x402HTTPClient(client);
-
-  const paymentPayload = await httpClient.createPaymentPayload(paymentRequired);
-  const paymentSigHeader = encodePaymentSignatureHeader(paymentPayload);
+  const paymentSigHeader = await createX402PaymentHeader(paymentRequired, clientSigner);
   console.log("EIP-712 EIP-3009 Transfer Authorization signed successfully.");
 
   // 7. Step 4: Submit signature and settle
