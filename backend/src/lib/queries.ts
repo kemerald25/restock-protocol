@@ -146,42 +146,32 @@ export const getOpenListingsForSKU = async (skuId: bigint): Promise<ListingDetai
 export const getSKUs = async (): Promise<SKUDetails[]> => {
   const skus: SKUDetails[] = [];
   let currentId = 1n;
-  const batchSize = 5;
-  let hasMore = true;
+  const batchSize = 10;
+  let hitEnd = false;
 
-  while (hasMore) {
+  while (!hitEnd) {
     const ids = Array.from({ length: batchSize }, (_, i) => currentId + BigInt(i));
-    const rawResults = await Promise.all(
-      ids.map(id =>
-        skuRegistry.getSKU(id)
-          .then((sku: any) => ({ id, sku }))
-          .catch(() => null)
-      )
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const sku = await skuRegistry.getSKU(id);
+          if (sku && sku.merchant !== "0x0000000000000000000000000000000000000000") {
+            return { id, sku };
+          }
+          return null;
+        } catch (err: any) {
+          // If the SKU does not exist, we have reached the end of the registry
+          if (err.message && err.message.includes("SKU does not exist")) {
+            hitEnd = true;
+          }
+          return null;
+        }
+      })
     );
 
-    const validResults = rawResults.filter((r): r is { id: bigint; sku: any } => r !== null && r.sku && r.sku.merchant !== "0x0000000000000000000000000000000000000000");
-
-    if (validResults.length < batchSize) {
-      hasMore = false;
-    }
-
-    if (validResults.length === 0) break;
-
-    const listingsResults = await Promise.all(
-      validResults.map(r => getOpenListingsForSKU(r.id))
-    );
-
-    for (let idx = 0; idx < validResults.length; idx++) {
-      const { id: skuId, sku } = validResults[idx];
-      const listings = listingsResults[idx];
-
-      const availableUnits = listings.reduce((sum, l) => sum + l.quantity, 0);
-      let lowestListingPrice: string | null = null;
-
-      if (listings.length > 0) {
-        const prices = listings.map(l => parseFloat(l.pricePerUnit));
-        lowestListingPrice = Math.min(...prices).toFixed(2);
-      }
+    for (const r of results) {
+      if (!r) continue;
+      const { id: skuId, sku } = r;
 
       const metadata = SKU_METADATA[skuId.toString()] || {
         name: `SKU #${skuId}`,
@@ -198,16 +188,34 @@ export const getSKUs = async (): Promise<SKUDetails[]> => {
         maxSupply: Number(sku.maxSupply),
         mintedSupply: Number(sku.mintedSupply),
         redeemedSupply: Number(sku.redeemedSupply),
-        availableUnits,
+        availableUnits: 1, // Default fallback
         basisValue: (Number(sku.basisValue) / 1000000).toFixed(2),
-        lowestListingPrice,
+        lowestListingPrice: null,
         royaltyBps: Number(sku.royaltyBps),
         metadataURI: sku.metadataURI,
       });
     }
 
+    if (results.some((r) => r === null && hitEnd)) {
+      break;
+    }
+
     currentId += BigInt(batchSize);
   }
+
+  // Asynchronously enrich availableUnits & lowestListingPrice
+  Promise.all(
+    skus.map(async (sku) => {
+      try {
+        const listings = await getOpenListingsForSKU(BigInt(sku.skuId));
+        sku.availableUnits = listings.reduce((sum, l) => sum + l.quantity, 0);
+        if (listings.length > 0) {
+          const prices = listings.map((l) => parseFloat(l.pricePerUnit));
+          sku.lowestListingPrice = Math.min(...prices).toFixed(2);
+        }
+      } catch (e) {}
+    })
+  ).catch(() => {});
 
   return skus;
 };

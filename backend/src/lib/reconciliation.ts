@@ -5,7 +5,8 @@ import {
   marketplaceWithRelayer,
   claimTokenWithRelayer,
   usdcWithRelayer,
-  fundRelayerIfNecessary
+  fundRelayerIfNecessary,
+  sendRelayerTx
 } from "./contracts";
 
 let isRunning = false;
@@ -140,7 +141,7 @@ async function processRecord(record: ReservationRecord) {
     // Try to fulfill reservation
     try {
       console.log(`[Reconciliation] Attempting fulfillment for reservation ${record.reservationId}...`);
-      const tx = await marketplaceWithRelayer.fulfillReservation(currentRecord.reservationId);
+      const tx = await sendRelayerTx((opts?: any) => opts ? marketplaceWithRelayer.fulfillReservation(currentRecord.reservationId, opts) : marketplaceWithRelayer.fulfillReservation(currentRecord.reservationId));
       console.log(`[Reconciliation] Fulfillment TX submitted: ${tx.hash}`);
       currentRecord.fulfillmentTxHash = tx.hash;
       
@@ -199,12 +200,21 @@ async function processRecord(record: ReservationRecord) {
       }
 
       // Transfer claim tokens from relayer back to final client buyer
-      const tx = await claimTokenWithRelayer.safeTransferFrom(
-        relayerAddress,
-        currentRecord.buyer,
-        skuId,
-        currentRecord.quantity,
-        "0x"
+      const tx = await sendRelayerTx((opts?: any) =>
+        opts ? claimTokenWithRelayer["safeTransferFrom(address,address,uint256,uint256,bytes)"](
+          relayerAddress,
+          currentRecord.buyer,
+          skuId,
+          currentRecord.quantity,
+          "0x",
+          opts
+        ) : claimTokenWithRelayer["safeTransferFrom(address,address,uint256,uint256,bytes)"](
+          relayerAddress,
+          currentRecord.buyer,
+          skuId,
+          currentRecord.quantity,
+          "0x"
+        )
       );
       console.log(`[Reconciliation] Delivery TX submitted: ${tx.hash}`);
       currentRecord.deliveryTxHash = tx.hash;
@@ -269,7 +279,7 @@ async function processRecord(record: ReservationRecord) {
         await waitForRelayerUSDC(refundAmountAtomic);
         
         // Call transfer(buyer, amount)
-        const tx = await usdcWithRelayer.transfer(currentRecord.buyer, refundAmountAtomic);
+        const tx = await sendRelayerTx((opts?: any) => opts ? usdcWithRelayer.transfer(currentRecord.buyer, refundAmountAtomic, opts) : usdcWithRelayer.transfer(currentRecord.buyer, refundAmountAtomic));
         console.log(`[Reconciliation] Refund TX submitted: ${tx.hash}`);
         currentRecord.refundTxHash = tx.hash;
         currentRecord.updatedAt = now;
@@ -317,7 +327,7 @@ export async function triggerRefund(record: ReservationRecord, db: any, reason: 
   try {
     const refundAmountAtomic = ethers.parseUnits(record.totalDue, 6);
     await waitForRelayerUSDC(refundAmountAtomic);
-    const tx = await usdcWithRelayer.transfer(record.buyer, refundAmountAtomic);
+    const tx = await sendRelayerTx((opts?: any) => opts ? usdcWithRelayer.transfer(record.buyer, refundAmountAtomic, opts) : usdcWithRelayer.transfer(record.buyer, refundAmountAtomic));
     console.log(`[Reconciliation] Immediate refund TX submitted: ${tx.hash}`);
     record.refundTxHash = tx.hash;
     writeDB(db);

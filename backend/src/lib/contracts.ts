@@ -47,28 +47,39 @@ export const addresses = {
 class RetryingJsonRpcProvider extends ethers.JsonRpcProvider {
   async send(method: string, params: Array<any> | Record<string, any>): Promise<any> {
     let attempts = 0;
-    const maxAttempts = 5;
+    const maxAttempts = 8;
     let delay = 1000;
     while (attempts < maxAttempts) {
       try {
         return await super.send(method, params);
       } catch (error: any) {
         attempts++;
+
+        // Never retry legitimate contract reverts (CALL_EXCEPTION)
+        if (error?.code === "CALL_EXCEPTION" && !String(error?.message || "").includes("over rate limit")) {
+          throw error;
+        }
+
+        const errStr = String(error?.message || "") + " " + String(error?.code || "") + " " + JSON.stringify(error || {});
         const isTransient = 
-          error.message?.includes("ECONNRESET") ||
-          error.message?.includes("ETIMEDOUT") ||
-          error.message?.includes("socket hang up") ||
-          error.message?.includes("network") ||
-          error.message?.includes("rate limit") ||
-          error.message?.includes("429") ||
-          error.message?.includes("ENOTFOUND") ||
-          error.code === "TIMEOUT" ||
-          error.code === "SERVER_ERROR";
+          errStr.includes("ECONNRESET") ||
+          errStr.includes("ETIMEDOUT") ||
+          errStr.includes("socket hang up") ||
+          errStr.includes("network") ||
+          errStr.includes("rate limit") ||
+          errStr.includes("over rate limit") ||
+          errStr.includes("429") ||
+          errStr.includes("-32016") ||
+          errStr.includes("ENOTFOUND") ||
+          error?.code === "TIMEOUT" ||
+          error?.code === "SERVER_ERROR";
         
         if (isTransient && attempts < maxAttempts) {
-          console.warn(`[RetryingJsonRpcProvider] Transient error on ${method} (attempt ${attempts}/${maxAttempts}): ${error.message}. Retrying in ${delay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          delay *= 2;
+          const jitter = Math.floor(Math.random() * 300);
+          const totalDelay = delay + jitter;
+          console.warn(`[RetryingJsonRpcProvider] Transient error on ${method} (attempt ${attempts}/${maxAttempts}): ${error.message || error.code || "unknown"}. Retrying in ${totalDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, totalDelay));
+          delay *= 1.8;
         } else {
           throw error;
         }
@@ -201,7 +212,7 @@ export const fundRelayerIfNecessary = async () => {
     console.log(`[Relayer Gas Fund] Checking relayer USDC allowance: ${ethers.formatUnits(currentAllowance, 6)} USDC`);
     if (currentAllowance < ethers.parseUnits("1000000.00", 6)) {
       console.log(`[Relayer Gas Fund] Relayer USDC allowance too low. Approving Marketplace...`);
-      const approveTx = await usdcWithRelayer.approve(addresses.Marketplace, ethers.MaxUint256);
+      const approveTx = await sendRelayerTx((opts) => usdcWithRelayer.approve(addresses.Marketplace, ethers.MaxUint256, opts));
       await approveTx.wait();
       console.log(`[Relayer Gas Fund] USDC approval tx confirmed: ${approveTx.hash}`);
     }
@@ -209,3 +220,19 @@ export const fundRelayerIfNecessary = async () => {
     console.error(`[Relayer Gas Fund] Error checking/funding/approving relayer:`, err.message || err);
   }
 };
+
+/**
+ * Helper to execute relayer transactions with automatic pending nonce recovery on nonce collisions.
+ */
+export async function sendRelayerTx(txFunc: (options?: { nonce?: number }) => Promise<any>): Promise<any> {
+  try {
+    return await txFunc();
+  } catch (err: any) {
+    if ((err?.code === "NONCE_EXPIRED" || String(err?.message || "").includes("nonce")) && relayerSigner?.provider) {
+      console.warn(`[Relayer Tx Sync] Nonce collision detected, retrying with fresh pending nonce...`);
+      const freshNonce = await relayerSigner.provider.getTransactionCount(relayerSigner.address, "pending");
+      return await txFunc({ nonce: freshNonce });
+    }
+    throw err;
+  }
+}

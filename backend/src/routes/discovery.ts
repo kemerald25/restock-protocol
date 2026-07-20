@@ -41,6 +41,26 @@ router.get("/skus", async (req: Request, res: Response) => {
 
     res.json({ results });
   } catch (error: any) {
+    const errStr = String(error?.message || "") + " " + String(error?.code || "") + " " + JSON.stringify(error || {});
+    const isRpcError = 
+      errStr.includes("rate limit") ||
+      errStr.includes("over rate limit") ||
+      errStr.includes("429") ||
+      errStr.includes("-32016") ||
+      errStr.includes("ECONNRESET") ||
+      errStr.includes("ETIMEDOUT") ||
+      errStr.includes("ENOTFOUND") ||
+      error?.code === "TIMEOUT" ||
+      error?.code === "SERVER_ERROR";
+
+    if (isRpcError) {
+      console.error("[Discovery Route RPC Error]:", error.message || error);
+      return res.status(503).json({
+        error: "Upstream RPC rate limited or temporarily unavailable",
+        details: error.message
+      });
+    }
+
     console.error("[Discovery Route Error]:", error);
     res.status(500).json({ error: "Failed to retrieve SKUs from blockchain", details: error.message });
   }

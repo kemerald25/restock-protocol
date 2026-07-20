@@ -13,7 +13,8 @@ import {
   usdc,
   usdcWithRelayer,
   addresses,
-  relayerSigner
+  relayerSigner,
+  sendRelayerTx
 } from "../lib/contracts";
 import { getListingActiveReservations } from "../lib/queries";
 import { triggerRefund } from "../lib/reconciliation";
@@ -60,7 +61,7 @@ router.post("/listings/:listingId/reserve", async (req: Request, res: Response) 
     console.log(`[Reserve Route] Reserving ${quantity} units of listing ${listingId} using relayer...`);
 
     // 3. Perform on-chain reservation
-    const tx = await marketplaceWithRelayer.reserve(listingId, quantity);
+    const tx = await sendRelayerTx((opts?: any) => opts ? marketplaceWithRelayer.reserve(listingId, quantity, opts) : marketplaceWithRelayer.reserve(listingId, quantity));
     const receipt = await tx.wait();
 
     // 4. Parse Reserved event
@@ -222,7 +223,7 @@ router.post("/reservations/:reservationId/pay", async (req: Request, res: Respon
     // 5. Try to fulfill reservation immediately (Inline Try/Catch)
     try {
       console.log(`[Pay Route] Calling fulfillReservation on-chain...`);
-      const fulfillTx = await marketplaceWithRelayer.fulfillReservation(reservationId);
+      const fulfillTx = await sendRelayerTx((opts?: any) => opts ? marketplaceWithRelayer.fulfillReservation(reservationId, opts) : marketplaceWithRelayer.fulfillReservation(reservationId));
       console.log(`[Pay Route] Fulfillment TX submitted: ${fulfillTx.hash}`);
       record.fulfillmentTxHash = fulfillTx.hash;
       writeDB(db);
@@ -260,12 +261,21 @@ router.post("/reservations/:reservationId/pay", async (req: Request, res: Respon
       }
 
       console.log(`[Pay Route] Delivering SKU token ${skuId} to client ${record.buyer}...`);
-      const deliveryTx = await claimTokenWithRelayer.safeTransferFrom(
-        relayerAddress,
-        record.buyer,
-        skuId,
-        record.quantity,
-        "0x"
+      const deliveryTx = await sendRelayerTx((opts?: any) =>
+        opts ? claimTokenWithRelayer["safeTransferFrom(address,address,uint256,uint256,bytes)"](
+          relayerAddress,
+          record.buyer,
+          skuId,
+          record.quantity,
+          "0x",
+          opts
+        ) : claimTokenWithRelayer["safeTransferFrom(address,address,uint256,uint256,bytes)"](
+          relayerAddress,
+          record.buyer,
+          skuId,
+          record.quantity,
+          "0x"
+        )
       );
       console.log(`[Pay Route] Delivery TX submitted: ${deliveryTx.hash}`);
       record.deliveryTxHash = deliveryTx.hash;
