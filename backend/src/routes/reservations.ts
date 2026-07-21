@@ -5,6 +5,7 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 // @ts-ignore
 import { decodePaymentSignatureHeader, encodePaymentRequiredHeader, encodePaymentResponseHeader } from "@x402/core/http";
 import { readDB, writeDB, ReservationRecord } from "../lib/db";
+import { requireScope } from "../middleware/auth";
 import {
   marketplace,
   marketplaceWithRelayer,
@@ -29,7 +30,7 @@ const facilitatorClient = new HTTPFacilitatorClient({
  * POST /listings/:listingId/reserve
  * Body: { "buyer": "0xAgentWallet", "quantity": 1 }
  */
-router.post("/listings/:listingId/reserve", async (req: Request, res: Response) => {
+router.post("/listings/:listingId/reserve", requireScope("buyer:transact"), async (req: Request, res: Response) => {
   try {
     const listingId = Number(req.params.listingId);
     const { buyer, quantity } = req.body;
@@ -118,7 +119,7 @@ router.post("/listings/:listingId/reserve", async (req: Request, res: Response) 
 /**
  * POST /reservations/:reservationId/pay
  */
-router.post("/reservations/:reservationId/pay", async (req: Request, res: Response) => {
+router.post("/reservations/:reservationId/pay", requireScope("buyer:transact"), async (req: Request, res: Response) => {
   try {
     const { reservationId } = req.params;
     const db = readDB();

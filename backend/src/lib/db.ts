@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { MerchantAccount, ApiKeyRecord, AuditLogEntry, BindingChallenge } from "../types";
 
 const DB_DIR = path.join(__dirname, "../../data");
 const DB_PATH = path.join(DB_DIR, "db.json");
@@ -38,12 +39,20 @@ export interface Database {
   redemptions: Record<string, Redemption>;
   shippingAddresses: Record<string, string>; // mapping from shippingRef -> shippingAddressResolved
   reservations: Record<string, ReservationRecord>;
+  merchants: Record<string, MerchantAccount>;
+  apiKeys: Record<string, ApiKeyRecord>;      // Keyed by hashedSecret
+  auditLogs: AuditLogEntry[];
+  bindingChallenges: Record<string, BindingChallenge>; // Keyed by nonce
 }
 
 const defaultDB: Database = {
   redemptions: {},
   shippingAddresses: {},
   reservations: {},
+  merchants: {},
+  apiKeys: {},
+  auditLogs: [],
+  bindingChallenges: {},
 };
 
 export const initDB = () => {
@@ -63,6 +72,10 @@ export const readDB = (): Database => {
     if (!parsed.redemptions) parsed.redemptions = {};
     if (!parsed.shippingAddresses) parsed.shippingAddresses = {};
     if (!parsed.reservations) parsed.reservations = {};
+    if (!parsed.merchants) parsed.merchants = {};
+    if (!parsed.apiKeys) parsed.apiKeys = {};
+    if (!parsed.auditLogs) parsed.auditLogs = [];
+    if (!parsed.bindingChallenges) parsed.bindingChallenges = {};
     return parsed;
   } catch (err) {
     return defaultDB;

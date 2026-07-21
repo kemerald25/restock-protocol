@@ -11,6 +11,7 @@ import { registerExactEvmScheme } from "@x402/evm/exact/client";
 // @ts-ignore
 import { decodePaymentRequiredHeader, encodePaymentSignatureHeader } from "@x402/core/http";
 import { readDB, writeDB } from "../src/lib/db";
+import { seedGenesis, GenesisKeysConfig } from "../src/scripts/seedGenesis";
 
 describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", function () {
   // Real network calls might take longer than the default 2s timeout
@@ -18,8 +19,10 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
 
   const testAddress = "123 Web3 Boulevard, San Francisco, CA 94103, US";
   const expectedRef = canonicalizeAndHashAddress(testAddress);
+  let genesisKeys: GenesisKeysConfig;
 
   before(async () => {
+    genesisKeys = seedGenesis();
     // Clear any stuck / expired reservations from the database to speed up tests
     const db = readDB();
     db.reservations = {};
@@ -180,6 +183,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
 
       const res = await request(app)
         .post(`/skus/${testSkuId}/redeem`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .send({
           holder: merchantSigner!.address,
           quantity: 1,
@@ -201,6 +205,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       const mismatchAddress = "456 Another St, New York, NY 10001, US";
       const res = await request(app)
         .post(`/skus/${testSkuId}/redeem`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .send({
           holder: merchantSigner!.address,
           quantity: 1,
@@ -221,6 +226,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       const casedAddress = "  123 WEB3 BOULEVARD, San Francisco, CA 94103, US  ";
       const res = await request(app)
         .post(`/skus/${testSkuId}/redeem`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .send({
           holder: merchantSigner!.address,
           quantity: 1,
@@ -235,7 +241,9 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       it("GET /admin/redemptions?status=Pending - should return the pending redemption", async () => {
         if (!redemptionId) return;
 
-        const res = await request(app).get("/admin/redemptions?status=Pending");
+        const res = await request(app)
+          .get("/admin/redemptions?status=Pending")
+          .set("Authorization", `Bearer ${genesisKeys.adminKey}`);
         expect(res.status).to.equal(200);
         expect(res.body.redemptions).to.be.an("array");
 
@@ -248,12 +256,16 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       it("POST /admin/redemptions/:id/mark-shipped - should update fulfillment status", async () => {
         if (!redemptionId) return;
 
-        const res = await request(app).post(`/admin/redemptions/${redemptionId}/mark-shipped`);
+        const res = await request(app)
+          .post(`/admin/redemptions/${redemptionId}/mark-shipped`)
+          .set("Authorization", `Bearer ${genesisKeys.adminKey}`);
         expect(res.status).to.equal(200);
         expect(res.body.fulfillmentStatus).to.equal("Shipped");
 
         // Verify status in GET query
-        const getRes = await request(app).get("/admin/redemptions?status=Shipped");
+        const getRes = await request(app)
+          .get("/admin/redemptions?status=Shipped")
+          .set("Authorization", `Bearer ${genesisKeys.adminKey}`);
         const found = getRes.body.redemptions.find((r: any) => r.redemptionId === redemptionId);
         expect(found).to.exist;
       });
@@ -311,6 +323,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       // 3. Update via backend API
       const res = await request(app)
         .post(`/admin/skus/${testSkuId}/basis-value`)
+        .set("Authorization", `Bearer ${genesisKeys.adminKey}`)
         .send({ value: newValUSDC });
 
       expect(res.status).to.equal(200);
@@ -419,6 +432,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
     it("POST /listings/:listingId/reserve - should create reservation on-chain & in DB", async () => {
       const res = await request(app)
         .post(`/listings/${listingId}/reserve`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .send({
           buyer: merchantSigner!.address,
           quantity: 1
@@ -443,6 +457,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
     it("POST /reservations/:reservationId/pay - should challenge with 402 Payment Required", async () => {
       const res = await request(app)
         .post(`/reservations/${reservationId}/pay`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .send();
 
       expect(res.status).to.equal(402);
@@ -488,6 +503,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       // Send payment request
       const res = await request(app)
         .post(`/reservations/${reservationId}/pay`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .set("payment-signature", paymentSigHeader)
         .send();
 
@@ -509,6 +525,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       // 1. Reserve another item
       const reserveRes = await request(app)
         .post(`/listings/${listingId}/reserve`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .send({
           buyer: merchantSigner!.address,
           quantity: 1
@@ -520,6 +537,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       // 2. Challenge
       const payChallengeRes = await request(app)
         .post(`/reservations/${testResId}/pay`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .send();
 
       expect(payChallengeRes.status).to.equal(402);
@@ -557,6 +575,7 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
       // 5. Send payment request (should trigger try/catch refund)
       const payRes = await request(app)
         .post(`/reservations/${testResId}/pay`)
+        .set("Authorization", `Bearer ${genesisKeys.buyerAgentKey}`)
         .set("payment-signature", paymentSigHeader)
         .send();
 

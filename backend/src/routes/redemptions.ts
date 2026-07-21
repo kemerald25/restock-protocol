@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { provider, claimToken, addresses } from "../lib/contracts";
 import { canonicalizeAndHashAddress } from "../lib/utils";
 import { readDB, writeDB } from "../lib/db";
+import { requireScope } from "../middleware/auth";
 import { ethers } from "ethers";
 
 const router = Router();
@@ -29,7 +30,7 @@ const router = Router();
  * 4. Retrieve `redemptionId` from event logs.
  * 5. Save the redemption in the local JSON database.
  */
-router.post("/skus/:skuId/redeem", async (req: Request, res: Response) => {
+router.post("/skus/:skuId/redeem", requireScope("buyer:transact"), async (req: Request, res: Response) => {
   const { skuId } = req.params;
   const { holder, quantity, txHash, shippingAddress, shippingRef } = req.body;
 

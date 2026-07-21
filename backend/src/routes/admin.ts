@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { skuRegistryWithSigner, merchantSigner } from "../lib/contracts";
 import { readDB, writeDB } from "../lib/db";
+import { requireScope } from "../middleware/auth";
 import { ethers } from "ethers";
 
 const router = Router();
@@ -10,7 +11,7 @@ const router = Router();
  * 
  * Retrieve all redemption requests from the offchain store, filtered by status.
  */
-router.get("/admin/redemptions", (req: Request, res: Response) => {
+router.get("/admin/redemptions", requireScope("admin:read"), (req: Request, res: Response) => {
   try {
     const { status } = req.query;
     const db = readDB();
@@ -36,7 +37,7 @@ router.get("/admin/redemptions", (req: Request, res: Response) => {
  * 
  * Update offchain fulfillment status. This does not touch the blockchain.
  */
-router.post("/admin/redemptions/:redemptionId/mark-shipped", (req: Request, res: Response) => {
+router.post("/admin/redemptions/:redemptionId/mark-shipped", requireScope("admin:write"), (req: Request, res: Response) => {
   const { redemptionId } = req.params;
   
   try {
@@ -68,7 +69,7 @@ router.post("/admin/redemptions/:redemptionId/mark-shipped", (req: Request, res:
  * Execute an onchain transaction calling `SKURegistry.updateBasisValue(...)`
  * using the merchant signer wallet.
  */
-router.post("/admin/skus/:skuId/basis-value", async (req: Request, res: Response) => {
+router.post("/admin/skus/:skuId/basis-value", requireScope("admin:write"), async (req: Request, res: Response) => {
   const { skuId } = req.params;
   const { value } = req.body;
   

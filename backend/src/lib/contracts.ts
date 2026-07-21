@@ -60,17 +60,30 @@ class RetryingJsonRpcProvider extends ethers.JsonRpcProvider {
           throw error;
         }
 
-        const errStr = String(error?.message || "") + " " + String(error?.code || "") + " " + JSON.stringify(error || {});
+        const errStr = (
+          String(error?.message || "") + " " +
+          String(error?.code || "") + " " +
+          String(error?.reason || "") + " " +
+          String(error?.syscall || "") + " " +
+          String(error?.cause || "") + " " +
+          String(error?.error?.message || "") + " " +
+          String(error?.error?.code || "")
+        ).toUpperCase();
+
         const isTransient = 
           errStr.includes("ECONNRESET") ||
           errStr.includes("ETIMEDOUT") ||
-          errStr.includes("socket hang up") ||
-          errStr.includes("network") ||
-          errStr.includes("rate limit") ||
-          errStr.includes("over rate limit") ||
+          errStr.includes("EPROTO") ||
+          errStr.includes("SSL") ||
+          errStr.includes("TLS") ||
+          errStr.includes("SOCKET HANG UP") ||
+          errStr.includes("NETWORK") ||
+          errStr.includes("RATE LIMIT") ||
+          errStr.includes("OVER RATE LIMIT") ||
           errStr.includes("429") ||
           errStr.includes("-32016") ||
           errStr.includes("ENOTFOUND") ||
+          errStr.includes("BAD RECORD MAC") ||
           error?.code === "TIMEOUT" ||
           error?.code === "SERVER_ERROR";
         
