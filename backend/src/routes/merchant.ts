@@ -4,7 +4,7 @@ import * as crypto from "crypto";
 import { readDB, writeDB } from "../lib/db";
 import { requireScope } from "../middleware/auth";
 import { generateApiKey, hashApiKey } from "../lib/auth";
-import { skuRegistry, skuRegistryWithSigner, marketplaceWithRelayer, marketplaceWithMerchant, merchantSigner } from "../lib/contracts";
+import { skuRegistry, skuRegistryWithSigner, marketplaceWithRelayer, marketplaceWithMerchant, merchantSigner, claimToken, ClaimTokenABI, addresses } from "../lib/contracts";
 import { PendingSkuRequest, ApiKeyScope } from "../types";
 import { BIND_WALLET_TYPES, EIP712_PLATFORM_DOMAIN } from "./merchantWallets";
 
@@ -45,7 +45,7 @@ export async function getActiveSKUsCount(merchantId: string): Promise<number> {
  * Body: { "maxSupply": 100, "royaltyBps": 500, "initialBasisValue": "150.00", "metadataURI": "https://..." }
  */
 router.post("/merchant/skus", requireScope("merchant:write"), async (req: Request, res: Response) => {
-  const { maxSupply, royaltyBps, initialBasisValue, metadataURI } = req.body;
+  const { maxSupply, royaltyBps, initialBasisValue, metadataURI, name, category, variant } = req.body;
 
   if (!maxSupply || royaltyBps === undefined || !initialBasisValue || !metadataURI) {
     return res.status(400).json({ error: "Missing required fields (maxSupply, royaltyBps, initialBasisValue, metadataURI)" });
@@ -139,6 +139,15 @@ router.post("/merchant/skus", requireScope("merchant:write"), async (req: Reques
     if (!db.merchantSkus[merchant.id].includes(newSkuId)) {
       db.merchantSkus[merchant.id].push(newSkuId);
     }
+    
+    // Save SKU metadata in db
+    if (!db.skuMetadata) db.skuMetadata = {};
+    db.skuMetadata[newSkuId] = {
+      name: name || `SKU #${newSkuId}`,
+      category: category || "uncategorized",
+      variant: variant || "Default"
+    };
+
     writeDB(db);
 
     return res.status(201).json({
@@ -204,6 +213,26 @@ router.post("/merchant/listings", requireScope("merchant:write"), async (req: Re
     const priceRaw = parseEtherOrUnits(pricePerUnit, 6);
     const primaryWallet = merchant.wallets[0]?.address || merchantSigner.address;
 
+    // Check balance and auto-mint if necessary
+    const claimTokenWithMerchant = new ethers.Contract(
+      addresses.ClaimToken,
+      ClaimTokenABI,
+      merchantSigner
+    ) as any;
+
+    const balance = await claimToken.balanceOf(merchantSigner.address, BigInt(skuId));
+    if (balance < BigInt(quantity)) {
+      const mintAmount = BigInt(quantity) - balance;
+      console.log(`[Auto-Mint] Merchant has ${balance.toString()} units. Minting additional ${mintAmount.toString()} units...`);
+      const mintTx = await claimTokenWithMerchant.mint(
+        BigInt(skuId),
+        merchantSigner.address,
+        mintAmount
+      );
+      await mintTx.wait();
+      console.log(`[Auto-Mint] Successfully minted ${mintAmount.toString()} units`);
+    }
+
     const tx = await marketplaceWithMerchant.createListing(
       BigInt(skuId),
       BigInt(quantity),
@@ -265,6 +294,24 @@ router.get("/merchant/orders", requireScope("merchant:read"), async (req: Reques
     redemptions: merchantRedemptions
   });
 });
+
+/**
+ * GET /merchant/skus
+ * Requires merchant:read scope.
+ * Returns the list of SKU IDs owned by the authenticated merchant.
+ */
+router.get("/merchant/skus", requireScope("merchant:read"), async (req: Request, res: Response) => {
+  const db = readDB();
+  const merchant = req.merchant || (req.apiKey?.ownerId ? db.merchants[req.apiKey.ownerId] : null);
+
+  if (!merchant) {
+    return res.status(404).json({ error: "Merchant account not found for authenticated key owner" });
+  }
+
+  const ownedSkuIds = db.merchantSkus[merchant.id] || [];
+  res.json({ skuIds: ownedSkuIds });
+});
+
 
 /**
  * GET /merchant/keys

@@ -45,6 +45,7 @@ export interface Database {
   bindingChallenges: Record<string, BindingChallenge>; // Keyed by nonce
   pendingSkuRequests: Record<string, PendingSkuRequest>; // Keyed by request id
   merchantSkus: Record<string, string[]>;    // Keyed by merchantId -> skuId array
+  skuMetadata: Record<string, { name: string; variant: string; category: string }>;
 }
 
 const defaultDB: Database = {
@@ -57,6 +58,7 @@ const defaultDB: Database = {
   bindingChallenges: {},
   pendingSkuRequests: {},
   merchantSkus: {},
+  skuMetadata: {},
 };
 
 export const initDB = () => {
@@ -87,6 +89,7 @@ export const readDB = (): Database => {
     if (!parsed.bindingChallenges) parsed.bindingChallenges = {};
     if (!parsed.pendingSkuRequests) parsed.pendingSkuRequests = {};
     if (!parsed.merchantSkus) parsed.merchantSkus = {};
+    if (!parsed.skuMetadata) parsed.skuMetadata = {};
     memoryCache = parsed;
     return parsed;
   } catch (err) {

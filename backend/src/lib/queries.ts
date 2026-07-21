@@ -1,5 +1,7 @@
 import { skuRegistry, marketplace, provider, deployment } from "./contracts";
 import { SKU_METADATA } from "../config";
+import { readDB } from "./db";
+
 
 export interface SKUDetails {
   skuId: string;
@@ -163,11 +165,12 @@ export const getSKUs = async (): Promise<SKUDetails[]> => {
       })
     );
 
+    const db = readDB();
     for (const r of results) {
       if (!r) continue;
       const { id: skuId, sku } = r;
 
-      const metadata = SKU_METADATA[skuId.toString()] || {
+      const metadata = (db.skuMetadata && db.skuMetadata[skuId.toString()]) || SKU_METADATA[skuId.toString()] || {
         name: `SKU #${skuId}`,
         variant: "Default",
         category: "uncategorized",
