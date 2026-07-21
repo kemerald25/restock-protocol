@@ -51,10 +51,29 @@ router.post("/skus/:skuId/redeem", requireScope("buyer:transact"), async (req: R
       });
     }
 
-    // 2. Fetch transaction from blockchain
-    const tx = await provider.getTransaction(txHash);
+    // 2. Fetch transaction from blockchain with retry loop for RPC propagation/rate-limiting
+    let tx: any = null;
+    let receipt: any = null;
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        if (!tx) {
+          tx = await provider.getTransaction(txHash);
+        }
+        if (tx && !receipt) {
+          receipt = await provider.getTransactionReceipt(txHash);
+        }
+        if (tx && receipt) {
+          break;
+        }
+      } catch (err: any) {
+        console.warn(`[Redemption Verification] RPC attempt ${attempt + 1}/10 failed: ${err.message || err}. Retrying in 1.5s...`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+
     if (!tx) {
-      return res.status(404).json({ error: "Transaction not found onchain" });
+      return res.status(404).json({ error: "Transaction not found onchain (RPC propagation timeout)" });
     }
 
     // 3. Decode input data to verify hash matching early
@@ -90,8 +109,7 @@ router.post("/skus/:skuId/redeem", requireScope("buyer:transact"), async (req: R
       });
     }
 
-    // 6. Fetch receipt to verify receipt status and other parameters
-    const receipt = await provider.getTransactionReceipt(txHash);
+    // 6. Verify receipt status and recipient
     if (!receipt) {
       return res.status(400).json({ error: "Transaction is not yet mined/confirmed" });
     }

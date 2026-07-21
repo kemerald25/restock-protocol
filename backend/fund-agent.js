@@ -16,8 +16,8 @@ async function main() {
   console.log('Sending from:', sender.address);
 
   const tx = await sender.sendTransaction({
-    to: '0x8aF29D127Bf34366E61323fc0F464AAD90A2371B',
-    value: ethers.parseEther('0.01'),
+    to: '0xD25e361679d00a46D440E21483237Aca3d28480A',
+    value: ethers.parseEther('0.00005'),
   });
 
   console.log('Sent. Tx hash:', tx.hash);

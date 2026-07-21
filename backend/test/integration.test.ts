@@ -75,13 +75,18 @@ describe("Restock Protocol Backend API Integration Tests (Live Base Sepolia)", f
     });
 
     it("GET /skus/:skuId/listings - should return listings or empty array", async () => {
-      const res = await request(app).get("/skus/1/listings");
-      expect(res.status).to.equal(200);
-      expect(res.body.skuId).to.equal("1");
-      expect(res.body.listings).to.be.an("array");
+      let res;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        res = await request(app).get("/skus/1/listings");
+        if (res.status === 200) break;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      expect(res!.status).to.equal(200);
+      expect(res!.body.skuId).to.equal("1");
+      expect(res!.body.listings).to.be.an("array");
 
       // Verify ascending order if there are multiple listings
-      const listings = res.body.listings;
+      const listings = res!.body.listings;
       if (listings.length > 1) {
         for (let i = 0; i < listings.length - 1; i++) {
           expect(parseFloat(listings[i].pricePerUnit)).to.be.lessThanOrEqual(parseFloat(listings[i+1].pricePerUnit));

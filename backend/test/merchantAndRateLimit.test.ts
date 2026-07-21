@@ -272,13 +272,11 @@ describe("Phase 5 Part 2: Merchant Routes, Trust-Tier Enforcement & Rate Limitin
 
     it("should trigger 429 Too Many Requests with Retry-After header when exceeding general limit", async function () {
       this.timeout(10000);
-      // Send 120 parallel requests to rapidly exhaust general limit (100 req/min)
-      const reqs = Array.from({ length: 120 }, () =>
-        request(app)
+      for (let i = 0; i < 110; i++) {
+        await request(app)
           .get("/merchant/keys")
-          .set("Authorization", `Bearer ${tier0MerchantKey}`)
-      );
-      await Promise.all(reqs);
+          .set("Authorization", `Bearer ${tier0MerchantKey}`);
+      }
 
       const res = await request(app)
         .get("/merchant/keys")

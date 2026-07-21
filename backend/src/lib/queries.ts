@@ -46,17 +46,11 @@ export const getBlockTimestamp = async (blockNumber: number): Promise<number> =>
  * Queries from deployment block number to minimize request size and avoid timeouts.
  */
 export const querySafeFilter = async (contract: any, filter: any): Promise<any[]> => {
-  const fromBlock = deployment?.blockNumber ? Number(deployment.blockNumber) : -100000;
   try {
-    return await contract.queryFilter(filter, fromBlock);
+    return await contract.queryFilter(filter, -1900);
   } catch (err: any) {
-    try {
-      // Fallback to last 1900 blocks to comply with strict 2000 range limits
-      return await contract.queryFilter(filter, -1900);
-    } catch (innerErr) {
-      console.error("[querySafeFilter Error]:", innerErr);
-      return [];
-    }
+    console.error("[querySafeFilter Error]:", err.message || err);
+    return [];
   }
 };
 
@@ -203,8 +197,8 @@ export const getSKUs = async (): Promise<SKUDetails[]> => {
     currentId += BigInt(batchSize);
   }
 
-  // Asynchronously enrich availableUnits & lowestListingPrice
-  Promise.all(
+  // Synchronously enrich availableUnits & lowestListingPrice
+  await Promise.all(
     skus.map(async (sku) => {
       try {
         const listings = await getOpenListingsForSKU(BigInt(sku.skuId));
@@ -215,7 +209,7 @@ export const getSKUs = async (): Promise<SKUDetails[]> => {
         }
       } catch (e) {}
     })
-  ).catch(() => {});
+  );
 
   return skus;
 };

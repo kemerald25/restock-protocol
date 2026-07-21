@@ -55,11 +55,6 @@ class RetryingJsonRpcProvider extends ethers.JsonRpcProvider {
       } catch (error: any) {
         attempts++;
 
-        // Never retry legitimate contract reverts (CALL_EXCEPTION)
-        if (error?.code === "CALL_EXCEPTION" && !String(error?.message || "").includes("over rate limit")) {
-          throw error;
-        }
-
         const errStr = (
           String(error?.message || "") + " " +
           String(error?.code || "") + " " +
@@ -69,6 +64,17 @@ class RetryingJsonRpcProvider extends ethers.JsonRpcProvider {
           String(error?.error?.message || "") + " " +
           String(error?.error?.code || "")
         ).toUpperCase();
+
+        const isRateLimit =
+          errStr.includes("OVER RATE LIMIT") ||
+          errStr.includes("RATE LIMIT") ||
+          errStr.includes("429") ||
+          errStr.includes("-32016");
+
+        // Never retry legitimate contract reverts (CALL_EXCEPTION) unless it's a rate limit error
+        if (error?.code === "CALL_EXCEPTION" && !isRateLimit) {
+          throw error;
+        }
 
         const isTransient = 
           errStr.includes("ECONNRESET") ||
@@ -143,6 +149,14 @@ export const skuRegistryWithSigner = merchantSigner
       merchantSigner
     ) as any)
   : skuRegistry;
+
+export const marketplaceWithMerchant = merchantSigner
+  ? (new ethers.Contract(
+      addresses.Marketplace,
+      MarketplaceABI,
+      merchantSigner
+    ) as any)
+  : marketplace;
 
 // Relayer Signer
 const RELAYER_PRIVATE_KEY = process.env.RELAYER_PRIVATE_KEY;

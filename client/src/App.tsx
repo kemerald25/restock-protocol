@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import deployment from "../../contracts/deployments/base-sepolia.json";
 import ClaimTokenArtifact from "../../contracts/artifacts/contracts/ClaimToken.sol/ClaimToken.json";
-import MarketplaceArtifact from "../../contracts/artifacts/contracts/Marketplace.sol/Marketplace.json";
 import { createX402PaymentHeader, type X402Signer } from "../../agent/x402-helper";
 import { canonicalizeAndHashAddress } from "./lib/utils";
 import "./App.css";
@@ -38,6 +37,9 @@ type BuyStep =
   | "polling_balance"
   | "completed"
   | "failed";
+
+const demoBuyerApiKey = import.meta.env.VITE_DEMO_BUYER_API_KEY || "";
+const demoMerchantApiKey = import.meta.env.VITE_DEMO_MERCHANT_API_KEY || "";
 
 export default function App() {
   const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
@@ -206,7 +208,8 @@ export default function App() {
       setChainId(cId);
 
       if (cId !== 84532) {
-        setNetworkError("Wrong network. Please switch to Base Sepolia (84532).");
+        setNetworkError("Wrong network. Requesting switch to Base Sepolia (84532)...");
+        await switchNetwork();
       } else {
         setNetworkError("");
       }
@@ -335,38 +338,34 @@ export default function App() {
     setListingStep("submitting");
     setListError("");
     try {
-      const marketplaceContract = new ethers.Contract(
-        deployment.Marketplace,
-        MarketplaceArtifact.abi,
-        signer
-      );
-      const priceInUnits = ethers.parseUnits(listPrice, 6);
-      const tx = await marketplaceContract.createListing(
-        showListModal.skuId,
-        listQuantity,
-        priceInUnits
-      );
-      const receipt = await tx.wait();
-
-      let createdId = "";
-      for (const log of receipt.logs) {
-        try {
-          const parsed = marketplaceContract.interface.parseLog(log);
-          if (parsed && parsed.name === "Listed") {
-            createdId = parsed.args[0].toString();
-            break;
-          }
-        } catch (e) {}
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json"
+      };
+      if (demoMerchantApiKey) {
+        headers["Authorization"] = `Bearer ${demoMerchantApiKey}`;
+      }
+      const res = await fetch("/api/merchant/listings", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          skuId: showListModal.skuId,
+          quantity: listQuantity,
+          pricePerUnit: listPrice
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || data.error || "Failed to create listing via merchant API");
       }
 
-      setCreatedListingId(createdId);
+      setCreatedListingId(data.listingId ? String(data.listingId) : "Created");
       setListingStep("completed");
       fetchSkus();
       if (selectedSku) fetchListings(selectedSku.skuId);
       fetchMyBalances();
     } catch (err: any) {
       console.error(err);
-      setListError(err.reason || err.message || String(err));
+      setListError(err.message || String(err));
       setListingStep("failed");
     }
   };
@@ -411,9 +410,13 @@ export default function App() {
 
       // 3. Submit to Backend for Verification
       setRedeemStep("submitting_backend");
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (demoBuyerApiKey) {
+        headers["Authorization"] = `Bearer ${demoBuyerApiKey}`;
+      }
       const res = await fetch(`/api/skus/${showRedeemModal.skuId}/redeem`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           holder: address,
           quantity: Number(redeemQuantity),
@@ -460,9 +463,13 @@ export default function App() {
     setClaimTokenBalance(null);
 
     try {
+      const reserveHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (demoBuyerApiKey) {
+        reserveHeaders["Authorization"] = `Bearer ${demoBuyerApiKey}`;
+      }
       const reserveRes = await fetch(`/api/listings/${listing.listingId}/reserve`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: reserveHeaders,
         body: JSON.stringify({ buyer: address, quantity: 1 })
       });
       if (!reserveRes.ok) {
@@ -473,8 +480,13 @@ export default function App() {
       setReservationId(reservation.reservationId);
 
       setBuyStep("awaiting_signature");
+      const payChallengeHeaders: Record<string, string> = {};
+      if (demoBuyerApiKey) {
+        payChallengeHeaders["Authorization"] = `Bearer ${demoBuyerApiKey}`;
+      }
       const payChallengeRes = await fetch(`/api/reservations/${reservation.reservationId}/pay`, {
-        method: "POST"
+        method: "POST",
+        headers: payChallengeHeaders
       });
       if (payChallengeRes.status !== 402) {
         throw new Error(`Expected 402 Payment Required, got status ${payChallengeRes.status}`);
@@ -508,11 +520,15 @@ export default function App() {
       const paymentSigHeader = await createX402PaymentHeader(paymentRequired, clientSigner);
 
       setBuyStep("settling");
+      const submitHeaders: Record<string, string> = {
+        "payment-signature": paymentSigHeader
+      };
+      if (demoBuyerApiKey) {
+        submitHeaders["Authorization"] = `Bearer ${demoBuyerApiKey}`;
+      }
       const paySubmitRes = await fetch(`/api/reservations/${reservation.reservationId}/pay`, {
         method: "POST",
-        headers: {
-          "payment-signature": paymentSigHeader
-        }
+        headers: submitHeaders
       });
 
       if (!paySubmitRes.ok) {

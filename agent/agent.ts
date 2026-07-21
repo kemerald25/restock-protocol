@@ -20,6 +20,7 @@ if (!fs.existsSync(DEPLOYMENT_PATH)) {
 const deployment = JSON.parse(fs.readFileSync(DEPLOYMENT_PATH, "utf8"));
 const backendUrl = process.env.BACKEND_API_URL || "http://localhost:3000";
 const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
+const buyerApiKey = process.env.DEMO_BUYER_API_KEY || process.env.BUYER_API_KEY;
 
 const loadABI = (contractName: string) => {
   const artifactPath = path.join(__dirname, `../contracts/artifacts/contracts/${contractName}.sol/${contractName}.json`);
@@ -124,7 +125,7 @@ async function main() {
   const { results }: { results: any[] } = await skusRes.json();
   console.log(`Found ${results.length} total tokenized SKUs.`);
 
-  const availableSku = results.find(s => s.availableUnits > 0);
+  const availableSku = results.find(s => s.lowestListingPrice !== null) || results.find(s => s.availableUnits > 0);
   if (!availableSku) {
     console.error("\n[Error] No available SKUs with active listings found. Please create a listing in the backend first.");
     process.exit(1);
@@ -137,8 +138,16 @@ async function main() {
   console.log(`  - stock:  ${availableSku.availableUnits} units available`);
 
   // 4. Fetch the listings for this SKU to find listingId
-  const listingsRes = await fetch(`${backendUrl}/skus/${availableSku.skuId}/listings`);
-  const { listings }: { listings: any[] } = await listingsRes.json();
+  let listings: any[] = [];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const listingsRes = await fetch(`${backendUrl}/skus/${availableSku.skuId}/listings`);
+    if (listingsRes.ok) {
+      const data = await listingsRes.json();
+      listings = data.listings || [];
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
   const activeListing = listings.find(l => l.quantity > 0 && l.status === "Open");
 
   if (!activeListing) {
@@ -150,9 +159,13 @@ async function main() {
 
   // 5. Step 2: Create a reservation
   console.log(`\n[2/4] Creating on-chain inventory reservation via Backend...`);
+  const reserveHeaders: Record<string, string> = { "Content-Type": "application/json" };
+  if (buyerApiKey) {
+    reserveHeaders["Authorization"] = `Bearer ${buyerApiKey}`;
+  }
   const reserveRes = await fetch(`${backendUrl}/listings/${activeListing.listingId}/reserve`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: reserveHeaders,
     body: JSON.stringify({
       buyer: wallet.address,
       quantity: 1
@@ -173,8 +186,13 @@ async function main() {
 
   // 6. Step 3: Trigger payment challenge and sign EIP-3009 authorization
   console.log(`\n[3/4] Initiating payment request to trigger x402 challenge...`);
+  const challengeHeaders: Record<string, string> = {};
+  if (buyerApiKey) {
+    challengeHeaders["Authorization"] = `Bearer ${buyerApiKey}`;
+  }
   const payChallengeRes = await fetch(`${backendUrl}/reservations/${reservation.reservationId}/pay`, {
-    method: "POST"
+    method: "POST",
+    headers: challengeHeaders
   });
 
   if (payChallengeRes.status !== 402) {
@@ -216,11 +234,13 @@ async function main() {
 
   // 7. Step 4: Submit signature and settle
   console.log(`\n[4/4] Submitting EIP-3009 payment signature back to Backend for settlement...`);
+  const paySubmitHeaders: Record<string, string> = { "payment-signature": paymentSigHeader };
+  if (buyerApiKey) {
+    paySubmitHeaders["Authorization"] = `Bearer ${buyerApiKey}`;
+  }
   const paySubmitRes = await fetch(`${backendUrl}/reservations/${reservation.reservationId}/pay`, {
     method: "POST",
-    headers: {
-      "payment-signature": paymentSigHeader
-    }
+    headers: paySubmitHeaders
   });
 
   if (!paySubmitRes.ok) {

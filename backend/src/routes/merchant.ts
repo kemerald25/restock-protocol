@@ -4,7 +4,7 @@ import * as crypto from "crypto";
 import { readDB, writeDB } from "../lib/db";
 import { requireScope } from "../middleware/auth";
 import { generateApiKey, hashApiKey } from "../lib/auth";
-import { skuRegistry, skuRegistryWithSigner, marketplaceWithRelayer, merchantSigner } from "../lib/contracts";
+import { skuRegistry, skuRegistryWithSigner, marketplaceWithRelayer, marketplaceWithMerchant, merchantSigner } from "../lib/contracts";
 import { PendingSkuRequest, ApiKeyScope } from "../types";
 import { BIND_WALLET_TYPES, EIP712_PLATFORM_DOMAIN } from "./merchantWallets";
 
@@ -204,11 +204,10 @@ router.post("/merchant/listings", requireScope("merchant:write"), async (req: Re
     const priceRaw = parseEtherOrUnits(pricePerUnit, 6);
     const primaryWallet = merchant.wallets[0]?.address || merchantSigner.address;
 
-    const tx = await marketplaceWithRelayer.createListing(
+    const tx = await marketplaceWithMerchant.createListing(
       BigInt(skuId),
       BigInt(quantity),
-      priceRaw,
-      primaryWallet
+      priceRaw
     );
 
     const receipt = await tx.wait();
