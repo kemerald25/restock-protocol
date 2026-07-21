@@ -48,13 +48,17 @@ export function authenticateApiKey(req: Request, res: Response, next: NextFuncti
     });
   }
 
-  // Update lastUsedAt timestamp asynchronously
+  // Update lastUsedAt timestamp in-memory and throttle disk writes
   const now = Math.floor(Date.now() / 1000);
+  const previousLastUsed = keyRecord.lastUsedAt || 0;
   keyRecord.lastUsedAt = now;
+
   const db = readDB();
-  if (db.apiKeys[keyRecord.hashedSecret]) {
-    db.apiKeys[keyRecord.hashedSecret].lastUsedAt = now;
-    writeDB(db);
+  if (now - previousLastUsed > 60) {
+    if (db.apiKeys[keyRecord.hashedSecret]) {
+      db.apiKeys[keyRecord.hashedSecret].lastUsedAt = now;
+      writeDB(db);
+    }
   }
 
   req.apiKey = keyRecord;

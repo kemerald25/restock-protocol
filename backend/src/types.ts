@@ -72,3 +72,18 @@ export interface BindingChallenge {
   consumed: boolean;
   createdAt: number;
 }
+
+export interface PendingSkuRequest {
+  id: string;                 // sku_req_[alphanumeric16]
+  merchantId: string;
+  maxSupply: number;
+  royaltyBps: number;
+  initialBasisValue: string;  // e.g. "150.00"
+  metadataURI: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  submittedAt: number;
+  reviewedAt?: number;
+  onchainSkuId?: number;
+  txHash?: string;
+  rejectionReason?: string;
+}

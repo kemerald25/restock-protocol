@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { MerchantAccount, ApiKeyRecord, AuditLogEntry, BindingChallenge } from "../types";
+import { MerchantAccount, ApiKeyRecord, AuditLogEntry, BindingChallenge, PendingSkuRequest } from "../types";
 
 const DB_DIR = path.join(__dirname, "../../data");
 const DB_PATH = path.join(DB_DIR, "db.json");
@@ -43,6 +43,8 @@ export interface Database {
   apiKeys: Record<string, ApiKeyRecord>;      // Keyed by hashedSecret
   auditLogs: AuditLogEntry[];
   bindingChallenges: Record<string, BindingChallenge>; // Keyed by nonce
+  pendingSkuRequests: Record<string, PendingSkuRequest>; // Keyed by request id
+  merchantSkus: Record<string, string[]>;    // Keyed by merchantId -> skuId array
 }
 
 const defaultDB: Database = {
@@ -53,6 +55,8 @@ const defaultDB: Database = {
   apiKeys: {},
   auditLogs: [],
   bindingChallenges: {},
+  pendingSkuRequests: {},
+  merchantSkus: {},
 };
 
 export const initDB = () => {
@@ -64,7 +68,12 @@ export const initDB = () => {
   }
 };
 
+let memoryCache: Database | null = null;
+
 export const readDB = (): Database => {
+  if (memoryCache) {
+    return memoryCache;
+  }
   initDB();
   try {
     const data = fs.readFileSync(DB_PATH, "utf8");
@@ -76,13 +85,18 @@ export const readDB = (): Database => {
     if (!parsed.apiKeys) parsed.apiKeys = {};
     if (!parsed.auditLogs) parsed.auditLogs = [];
     if (!parsed.bindingChallenges) parsed.bindingChallenges = {};
+    if (!parsed.pendingSkuRequests) parsed.pendingSkuRequests = {};
+    if (!parsed.merchantSkus) parsed.merchantSkus = {};
+    memoryCache = parsed;
     return parsed;
   } catch (err) {
+    memoryCache = defaultDB;
     return defaultDB;
   }
 };
 
 export const writeDB = (db: Database) => {
+  memoryCache = db;
   initDB();
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), "utf8");
 };

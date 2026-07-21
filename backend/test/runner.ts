@@ -6,6 +6,7 @@ const mocha = new Mocha({
 });
 
 mocha.addFile(path.join(__dirname, "authAndIdentity.test.ts"));
+mocha.addFile(path.join(__dirname, "merchantAndRateLimit.test.ts"));
 mocha.addFile(path.join(__dirname, "integration.test.ts"));
 
 mocha.run((failures) => {
